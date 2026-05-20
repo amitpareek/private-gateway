@@ -37,20 +37,17 @@ import (
 
 var (
 	hostname     = flag.String("hostname", "", "Tailscale hostname to serve on")
-	port         = flag.Int("port", 5432, "Listening port for client connections")
 	debugPort    = flag.Int("debug-port", 80, "Listening port for debug/metrics endpoint")
-	upstreamAddr = flag.String("upstream-addr", "", "Address of the upstream Postgres server, in host:port format")
 	upstreamCA   = flag.String("upstream-ca-file", "", "File containing the PEM-encoded CA certificate for the upstream server")
 	tailscaleDir = flag.String("state-dir", "", "Directory in which to store the Tailscale auth state")
+	// EXT: --port and --upstream-addr from upstream are replaced by
+	// the repeatable --upstream flag declared in extensions.go.
 )
 
 func main() {
 	flag.Parse()
 	if *hostname == "" {
 		log.Fatal("missing --hostname")
-	}
-	if *upstreamAddr == "" {
-		log.Fatal("missing --upstream-addr")
 	}
 	if *upstreamCA == "" {
 		log.Fatal("missing --upstream-ca-file")
@@ -73,35 +70,24 @@ func main() {
 		log.Fatalf("getting tsnet API client: %v", err)
 	}
 
-	p, err := newProxy(*upstreamAddr, *upstreamCA, tsclient)
-	if err != nil {
-		log.Fatal(err)
-	}
-	expvar.Publish("pgproxy", p.Expvar())
-
+	// EXT BEGIN: debug listener exists, but the per-upstream proxy
+	// creation, Expvar publication, and connection listeners are now
+	// driven by runProxies in extensions.go (one proxy per --upstream).
+	var debugMux *http.ServeMux
 	if *debugPort != 0 {
-		mux := http.NewServeMux()
-		tsweb.Debugger(mux)
-		srv := &http.Server{
-			Handler: mux,
-		}
+		debugMux = http.NewServeMux()
+		tsweb.Debugger(debugMux)
+		srv := &http.Server{Handler: debugMux}
 		dln, err := ts.Listen("tcp", fmt.Sprintf(":%d", *debugPort))
 		if err != nil {
 			log.Fatal(err)
 		}
-		go func() {
-			log.Fatal(srv.Serve(dln))
-		}()
+		go func() { log.Fatal(srv.Serve(dln)) }()
 	}
 
-	ln, err := ts.Listen("tcp", fmt.Sprintf(":%d", *port))
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("serving access to %s on port %d", *upstreamAddr, *port)
-	go func() { log.Fatal(p.Serve(ln)) }() // EXT: was log.Fatal(p.Serve(ln)); we now also start the Fly + HTTP listeners below.
-	startExtensions(p)                     // EXT: start Fly 6PN and HTTP CONNECT listeners (see extensions.go).
-	select {}                              // EXT: block forever; the listeners above log.Fatal on errors.
+	runProxies(ts, tsclient, *upstreamCA, debugMux)
+	select {}
+	// EXT END
 }
 
 // proxy is a postgres wire protocol proxy, which strictly enforces

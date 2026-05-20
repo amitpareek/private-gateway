@@ -1,23 +1,25 @@
 #!/bin/sh
 # Map Fly env vars / secrets to pgproxy flags.
 #
-# Required (set with `fly secrets set ...`):
-#   DESTINATION_PG_URL  Upstream Postgres host:port, e.g.
-#                       ep-x-y.us-east-1.aws.neon.tech:5432
-#   TS_AUTHKEY          Tailscale auth key. Use an ephemeral+reusable
-#                       key so each restart auto-cleans the old node.
+# Required:
+#   TS_AUTHKEY            Tailscale auth key. Use an ephemeral+reusable
+#                         key so each restart auto-cleans the old node.
 #
 # Optional:
-#   TS_HOSTNAME         Tailscale hostname. Default: $FLY_APP_NAME.
-#   UPSTREAM_CA_FILE    CA bundle for upstream TLS verification.
-#                       Default: /etc/ssl/certs/ca-certificates.crt
-#                       (system roots; validates Neon's public cert).
-#   STATE_DIR           Tailscale state dir. Default: /tmp/tsnet
-#                       (in-memory via tmpfs; node re-auths on
-#                       every restart, hence the ephemeral key).
+#   DESTINATION_PG_DBS    JSON array of Postgres databases. Example:
+#                           [
+#                             {"name":"rw","listen":5432,
+#                              "target":"ep-xxx.aws.neon.tech:5432"},
+#                             {"name":"readonly","listen":5433,
+#                              "target":"ep-yyy-pooler.aws.neon.tech:5432"}
+#                           ]
+#                         May be empty on first launch; configure later
+#                         via `fly secrets set DESTINATION_PG_DBS='...'`.
+#   TS_HOSTNAME           Tailscale hostname. Default: $FLY_APP_NAME.
+#   UPSTREAM_CA_FILE      CA bundle. Default: /etc/ssl/certs/ca-certificates.crt
+#   STATE_DIR             tsnet state dir. Default: /tmp/tsnet
 set -e
 
-: "${DESTINATION_PG_URL:?DESTINATION_PG_URL must be set (e.g. via 'fly secrets set DESTINATION_PG_URL=...')}"
 : "${TS_AUTHKEY:?TS_AUTHKEY must be set (use an ephemeral+reusable key)}"
 
 TS_HOSTNAME="${TS_HOSTNAME:-${FLY_APP_NAME:-pgproxy}}"
@@ -28,6 +30,6 @@ mkdir -p "$STATE_DIR"
 
 exec /pgproxy \
   --hostname="$TS_HOSTNAME" \
-  --upstream-addr="$DESTINATION_PG_URL" \
   --upstream-ca-file="$UPSTREAM_CA_FILE" \
-  --state-dir="$STATE_DIR"
+  --state-dir="$STATE_DIR" \
+  --destination-pg-dbs="${DESTINATION_PG_DBS:-}"

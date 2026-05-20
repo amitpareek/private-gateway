@@ -90,10 +90,40 @@ other Fly apps that need to make outbound HTTPS calls through the
 deployment's fixed Fly egress IP (e.g. to vendors that require IP
 allowlisting). Set `--http-proxy-listen=""` to disable.
 
-### New flags
+### Multiple databases
 
-- `--fly-listen` (default `[::]:5432`) — kernel TCP listen address
-  for Fly 6PN PG clients. Empty disables.
+Databases are configured via a single Fly secret named
+`DESTINATION_PG_DBS` containing a JSON array. Each entry has a
+name, a local listen port, and an upstream `host:port`:
+
+```sh
+fly secrets set DESTINATION_PG_DBS='[
+  {"name":"rw","listen":5432,
+   "target":"ep-xxx.aws.neon.tech:5432"},
+  {"name":"readonly","listen":5433,
+   "target":"ep-yyy-pooler.aws.neon.tech:5432"}
+]'
+```
+
+Clients pick which DB by port (`pgproxy.internal:5432` vs `:5433`).
+Add, rename, or remove databases by editing the JSON and
+redeploying. Empty list is allowed — first launch will commonly
+have none until you set the secret.
+
+### Dev reference page
+
+A small HTML page at `/` on the debug port (default `:80`,
+Tailscale-only) lists the configured databases with their Fly 6PN
+and Tailscale URLs and target `host:port`. It also documents how to
+configure `DESTINATION_PG_DBS` and how to use the HTTP CONNECT
+proxy. No credentials are ever shown — pgproxy never sees them.
+
+### Flags added by this fork
+
+- `--destination-pg-dbs` — JSON array of `{name, listen, target}`
+  entries. Empty allowed.
+- `--fly-listen-host` (default `[::]`) — host (no port) to bind Fly
+  6PN listeners on. Empty disables Fly listeners.
 - `--http-proxy-listen` (default `[::]:8080`) — kernel TCP listen
   address for the HTTPS CONNECT forward proxy. Empty disables.
 

@@ -3,17 +3,24 @@
 # Before first deploy:
 #
 #   fly apps create pgproxy
-#   fly secrets set \
-#       TS_AUTHKEY="tskey-auth-..." \
-#       DESTINATION_PG_URL="ep-xxx.aws.neon.tech:5432"
+#   fly secrets set TS_AUTHKEY="tskey-auth-..."
 #   fly deploy
 #
-# Use an *ephemeral + reusable* Tailscale auth key. State lives in
-# /tmp (tmpfs), so each restart re-auths to the tailnet; ephemeral
-# means the old node auto-cleans within ~30 min.
+# The proxy will start up with no databases configured. Open
+# http://pgproxy/ (over Tailscale) for the dev reference page and
+# copy the example into a `fly secrets set DESTINATION_PG_DBS='...'`
+# command when you're ready to add databases:
 #
-# `pgproxy.internal` will resolve over 6PN from any app in the same
-# Fly org. No public services are exposed.
+#   fly secrets set DESTINATION_PG_DBS='[
+#     {"name":"rw","listen":5432,
+#      "target":"ep-xxx.aws.neon.tech:5432"},
+#     {"name":"readonly","listen":5433,
+#      "target":"ep-yyy-pooler.aws.neon.tech:5432"}
+#   ]'
+#   fly deploy
+#
+# Use an *ephemeral + reusable* Tailscale auth key; state lives in
+# /tmp (tmpfs), so each restart re-auths.
 
 app = "pgproxy"
 primary_region = "sin"
@@ -31,7 +38,7 @@ primary_region = "sin"
   size      = "shared-cpu-1x"
   memory_mb = 512
 
-# No [[services]] block: pgproxy is internal-only and reachable to
-# other Fly apps via 6PN (pgproxy.internal:5432 for Postgres,
-# pgproxy.internal:8080 for the HTTPS CONNECT proxy), and to humans
-# via Tailscale.
+# No [[services]] block: pgproxy is internal-only. Postgres on the
+# per-database listen ports over 6PN/Tailscale; HTTPS CONNECT proxy
+# on 8080 (Fly 6PN only); debug + dev reference page on 80
+# (Tailscale only).
