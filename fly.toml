@@ -1,0 +1,37 @@
+# Fly.io configuration for pgproxy.
+#
+# Before first deploy:
+#
+#   fly apps create pgproxy
+#   fly secrets set \
+#       TS_AUTHKEY="tskey-auth-..." \
+#       DESTINATION_PG_URL="ep-xxx.aws.neon.tech:5432"
+#   fly deploy
+#
+# Use an *ephemeral + reusable* Tailscale auth key. State lives in
+# /tmp (tmpfs), so each restart re-auths to the tailnet; ephemeral
+# means the old node auto-cleans within ~30 min.
+#
+# `pgproxy.internal` will resolve over 6PN from any app in the same
+# Fly org. No public services are exposed.
+
+app = "pgproxy"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret defaults; uncomment to override.
+  # UPSTREAM_CA_FILE = "/etc/ssl/certs/ca-certificates.crt"
+  # STATE_DIR        = "/tmp/tsnet"
+  # TS_HOSTNAME      = "pgproxy"
+
+[[vm]]
+  size      = "shared-cpu-1x"
+  memory_mb = 512
+
+# No [[services]] block: pgproxy is internal-only and reachable to
+# other Fly apps via 6PN (pgproxy.internal:5432 for Postgres,
+# pgproxy.internal:8080 for the HTTPS CONNECT proxy), and to humans
+# via Tailscale.
