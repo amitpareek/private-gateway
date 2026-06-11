@@ -112,3 +112,16 @@ CancelRequest magic remains rejected.
   SCRAM specifically is delegated to pgconn (battle-tested; Neon uses
   it).
 - All existing tests keep passing.
+
+## Implementation notes (discovered during build)
+
+- The committed module state (`go 1.23`, `tailscale.com v1.78.1`) was
+  never buildable: the code imports `tailscale.com/client/local`,
+  which first exists in tailscale v1.82.0, and v1.82.0 requires
+  Go 1.24. Pinned the minimal working set: Go 1.24,
+  tailscale v1.82.5, pgx v5.7.6 (the newest pgx supporting Go 1.24;
+  v5.8+ requires newer Go). Dockerfile bumped to `golang:1.24-alpine`.
+- A pre-existing test bug was fixed: the "startup not
+  null-terminated" case in `TestRewriteStartup_RejectsMalformed`
+  built a buffer whose last byte was 0 due to zero-fill, so it
+  asserted an error that never came.

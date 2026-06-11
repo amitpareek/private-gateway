@@ -49,12 +49,23 @@ import (
 
 // upstreamConfig describes one named Postgres upstream. The proxy
 // listens on Listen (on both Tailscale and Fly 6PN) and forwards to
-// Target.
+// Target. If User and Password are set the entry is "managed": the
+// proxy itself authenticates to the upstream with those credentials
+// and clients connect credential-less (their startup user is
+// ignored; only the database name is honored). Without credentials
+// the entry is a passthrough, exactly like upstream pgproxy.
 type upstreamConfig struct {
-	Name   string `json:"name"`
-	Listen int    `json:"listen"`
-	Target string `json:"target"` // host:port
+	Name     string `json:"name"`
+	Listen   int    `json:"listen"`
+	Target   string `json:"target"`             // host:port
+	DBName   string `json:"dbname,omitempty"`   // managed: default database
+	User     string `json:"user,omitempty"`     // managed: upstream role
+	Password string `json:"password,omitempty"` // managed: upstream password
 }
+
+// managed reports whether the proxy holds credentials for this
+// upstream and should authenticate on the client's behalf.
+func (u upstreamConfig) managed() bool { return u.User != "" }
 
 var (
 	destinationPgDbs = flag.String("destination-pg-dbs", "", `JSON array of {"name","listen","target"} entries. Empty is allowed.`)
@@ -66,7 +77,11 @@ var (
 // a JSON array of upstreamConfig and validates each entry. An empty
 // or whitespace value yields a nil list and no error.
 func parseDestinationPgDbs() ([]upstreamConfig, error) {
-	s := strings.TrimSpace(*destinationPgDbs)
+	return parseDestinationPgDbsJSON(*destinationPgDbs)
+}
+
+func parseDestinationPgDbsJSON(raw string) ([]upstreamConfig, error) {
+	s := strings.TrimSpace(raw)
 	if s == "" {
 		return nil, nil
 	}
@@ -88,6 +103,17 @@ func parseDestinationPgDbs() ([]upstreamConfig, error) {
 		}
 		if _, _, err := net.SplitHostPort(u.Target); err != nil {
 			return nil, fmt.Errorf("entry %q: target must be host:port (%v)", u.Name, err)
+		}
+		u.DBName = strings.TrimSpace(u.DBName)
+		u.User = strings.TrimSpace(u.User)
+		if u.User != "" && u.Password == "" {
+			return nil, fmt.Errorf("entry %q: user set without password", u.Name)
+		}
+		if u.User == "" && u.Password != "" {
+			return nil, fmt.Errorf("entry %q: password set without user", u.Name)
+		}
+		if u.DBName != "" && u.User == "" {
+			return nil, fmt.Errorf("entry %q: dbname only applies to managed entries; set user+password too", u.Name)
 		}
 		if seenName[u.Name] {
 			return nil, fmt.Errorf("duplicate name %q", u.Name)
@@ -120,6 +146,10 @@ func runProxies(ts *tsnet.Server, tsclient *local.Client, upstreamCAPath string,
 		p, err := newProxy(u.Target, upstreamCAPath, tsclient)
 		if err != nil {
 			log.Fatalf("db %q: %v", u.Name, err)
+		}
+		p.cfg = u
+		if u.managed() {
+			log.Printf("db %q: managed mode, upstream user %q default db %q", u.Name, u.User, u.DBName)
 		}
 		expvar.Publish("pgproxy_"+u.Name, p.Expvar())
 
@@ -167,8 +197,8 @@ func runProxies(ts *tsnet.Server, tsclient *local.Client, upstreamCAPath string,
 // renderDevPage writes a small HTML reference page listing the
 // configured databases with their Tailscale and Fly 6PN connection
 // URLs and target host:port. It also documents how to add/modify
-// databases and how to use the HTTP CONNECT proxy. Credentials are
-// never displayed — pgproxy never sees them.
+// databases and how to use the HTTP CONNECT proxy. Passwords are
+// never displayed.
 func renderDevPage(w http.ResponseWriter, ts *tsnet.Server, cfgs []upstreamConfig) {
 	tsHost := ts.Hostname
 	if tsclient, err := ts.LocalClient(); err == nil {
@@ -183,22 +213,32 @@ func renderDevPage(w http.ResponseWriter, ts *tsnet.Server, cfgs []upstreamConfi
 	if flyApp != "" {
 		flyHost = flyApp + ".internal"
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(renderDevPageHTML(tsHost, flyHost, cfgs))
+}
 
+func renderDevPageHTML(tsHost, flyHost string, cfgs []upstreamConfig) []byte {
 	sorted := append([]upstreamConfig(nil), cfgs...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Listen < sorted[j].Listen })
 
 	// Build a sample JSON config preserving whatever is already
-	// configured, so devs can copy it and edit.
-	sample := sorted
+	// configured, so devs can copy it and edit. Passwords are
+	// replaced with a placeholder; they must never reach the page.
+	sample := append([]upstreamConfig(nil), sorted...)
+	for i := range sample {
+		if sample[i].Password != "" {
+			sample[i].Password = "<password>"
+		}
+	}
 	if len(sample) == 0 {
 		sample = []upstreamConfig{
-			{Name: "rw", Listen: 5432, Target: "ep-xxx.aws.neon.tech:5432"},
-			{Name: "readonly", Listen: 5433, Target: "ep-yyy-pooler.aws.neon.tech:5432"},
+			{Name: "rw", Listen: 5432, Target: "ep-xxx.aws.neon.tech:5432",
+				DBName: "main", User: "app_user", Password: "<password>"},
+			{Name: "admin", Listen: 5439, Target: "ep-xxx.aws.neon.tech:5432"},
 		}
 	}
 	sampleJSON, _ := json.MarshalIndent(sample, "", "  ")
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var b bytes.Buffer
 	b.WriteString(`<!doctype html>
 <html><head><meta charset="utf-8"><title>pgproxy</title>
@@ -229,10 +269,27 @@ as a Fly secret to add some — see <em>Configure</em> below.
 `)
 	} else {
 		for _, u := range sorted {
-			fmt.Fprintf(&b, "<h3>%s <span class=\"note\">port %d</span></h3>\n", html.EscapeString(u.Name), u.Listen)
+			mode := "passthrough"
+			if u.managed() {
+				mode = "managed"
+			}
+			fmt.Fprintf(&b, "<h3>%s <span class=\"note\">port %d · %s</span></h3>\n", html.EscapeString(u.Name), u.Listen, mode)
 			b.WriteString("<table>\n")
-			fmt.Fprintf(&b, "<tr><th>Fly 6PN</th><td><code>%s:%d</code></td></tr>\n", html.EscapeString(flyHost), u.Listen)
-			fmt.Fprintf(&b, "<tr><th>Tailscale</th><td><code>%s:%d</code></td></tr>\n", html.EscapeString(tsHost), u.Listen)
+			if u.managed() {
+				connPath := ""
+				if u.DBName != "" {
+					connPath = "/" + u.DBName
+				}
+				fmt.Fprintf(&b, "<tr><th>Fly 6PN</th><td><code>postgres://%s:%d%s</code></td></tr>\n", html.EscapeString(flyHost), u.Listen, html.EscapeString(connPath))
+				fmt.Fprintf(&b, "<tr><th>Tailscale</th><td><code>postgres://%s:%d%s</code></td></tr>\n", html.EscapeString(tsHost), u.Listen, html.EscapeString(connPath))
+				fmt.Fprintf(&b, "<tr><th>Upstream user</th><td><code>%s</code> <span class=\"note\">(injected by the proxy; no client credentials needed)</span></td></tr>\n", html.EscapeString(u.User))
+				if u.DBName != "" {
+					fmt.Fprintf(&b, "<tr><th>Default db</th><td><code>%s</code> <span class=\"note\">(override with any db name in the connection string)</span></td></tr>\n", html.EscapeString(u.DBName))
+				}
+			} else {
+				fmt.Fprintf(&b, "<tr><th>Fly 6PN</th><td><code>%s:%d</code> <span class=\"note\">(client must supply real upstream credentials)</span></td></tr>\n", html.EscapeString(flyHost), u.Listen)
+				fmt.Fprintf(&b, "<tr><th>Tailscale</th><td><code>%s:%d</code></td></tr>\n", html.EscapeString(tsHost), u.Listen)
+			}
 			fmt.Fprintf(&b, "<tr><th>Target</th><td class=\"target\"><code>%s</code></td></tr>\n", html.EscapeString(u.Target))
 			b.WriteString("</table>\n")
 		}
@@ -242,6 +299,13 @@ as a Fly secret to add some — see <em>Configure</em> below.
 <p>Databases are configured via a single Fly secret named
 <code>DESTINATION_PG_DBS</code> containing a JSON array. Each entry
 has a name, a local listen port, and an upstream target (host:port).
+With <code>user</code> + <code>password</code> (+ optional default
+<code>dbname</code>) the entry is <strong>managed</strong>: the proxy
+authenticates to the upstream itself and clients connect with no
+credentials at all — the client's username is ignored, and only the
+database name in its connection string is honored. Without
+credentials the entry is a <strong>passthrough</strong> and clients
+must hold real upstream credentials.
 Add, rename, or remove databases by editing the secret and redeploying:</p>
 <pre>fly secrets set DESTINATION_PG_DBS='`)
 	b.WriteString(html.EscapeString(string(sampleJSON)))
@@ -276,7 +340,7 @@ you can attribute traffic and spot noisy neighbors.</p>
 <p class="note">Metrics and debug endpoints under <a href="/debug/vars">/debug/vars</a>.</p>
 </body></html>
 `)
-	w.Write(b.Bytes())
+	return b.Bytes()
 }
 
 // peerKind classifies the source of an inbound connection.

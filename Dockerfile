@@ -1,4 +1,6 @@
-FROM golang:1.23-alpine AS build
+# go.mod requires go >= 1.24 (tailscale.com v1.82+, which provides
+# the client/local package this fork imports).
+FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download

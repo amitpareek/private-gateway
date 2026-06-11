@@ -56,10 +56,13 @@ Peer classification is by source IP range:
   `WhoIs` is required, same as upstream pgproxy.
 - Anything else — rejected (counter `errors{kind=disallowed-source}`).
 
-Authentication to pgproxy itself is unchanged: there is none. Auth is
-delegated to the upstream Postgres server. Access control is enforced
-by the source-IP classifier on every accepted connection; Fly does
-not expose internal TCP ports publicly by default.
+Authentication to pgproxy itself: there is none. For passthrough
+entries auth is delegated to the upstream Postgres server; for
+managed entries (see below) the proxy itself logs in upstream with
+configured credentials, so network reachability is the only gate.
+Access control is enforced by the source-IP classifier on every
+accepted connection; Fly does not expose internal TCP ports publicly
+by default.
 
 ### Per-connection attribution (`application_name`)
 
@@ -94,14 +97,19 @@ allowlisting). Set `--http-proxy-listen=""` to disable.
 
 Databases are configured via a single Fly secret named
 `DESTINATION_PG_DBS` containing a JSON array. Each entry has a
-name, a local listen port, and an upstream `host:port`:
+name, a local listen port, an upstream `host:port`, and (optionally)
+managed credentials:
 
 ```sh
 fly secrets set DESTINATION_PG_DBS='[
   {"name":"rw","listen":5432,
-   "target":"ep-xxx.aws.neon.tech:5432"},
+   "target":"ep-xxx.aws.neon.tech:5432",
+   "dbname":"main","user":"app_user","password":"s3cret"},
   {"name":"readonly","listen":5433,
-   "target":"ep-yyy-pooler.aws.neon.tech:5432"}
+   "target":"ep-yyy-pooler.aws.neon.tech:5432",
+   "dbname":"main","user":"app_ro","password":"s3cret2"},
+  {"name":"admin","listen":5439,
+   "target":"ep-xxx.aws.neon.tech:5432"}
 ]'
 ```
 
@@ -109,6 +117,48 @@ Clients pick which DB by port (`pgproxy.internal:5432` vs `:5433`).
 Add, rename, or remove databases by editing the JSON and
 redeploying. Empty list is allowed — first launch will commonly
 have none until you set the secret.
+
+### Managed credentials (credential injection)
+
+Entries with `user` + `password` are **managed**: the proxy
+authenticates to the upstream itself (SCRAM-SHA-256, md5, or
+cleartext — Neon uses SCRAM), so no app or human ever holds DB
+credentials. A client connects with nothing but host, port, and
+optionally a database name:
+
+```
+postgres://pgproxy.internal:5432/mydb
+postgres://pgproxy.internal:5432          # default dbname from config
+```
+
+Rules in managed mode:
+
+- The client's username is **ignored** (drivers auto-fill the OS
+  user when the connection string has none; the proxy doesn't care).
+  Authentication upstream always uses the configured `user`.
+- The client's `database` is honored, except when it equals the
+  client's username — that's the driver auto-fill pattern for "no
+  database specified" — in which case the configured `dbname`
+  applies. To use a different role, add another entry on another
+  port (or a passthrough entry).
+- The client is never asked for a password. If the upstream rejects
+  the proxy's credentials, the client gets a normal Postgres FATAL
+  error explaining it.
+- The upstream's session state (`ParameterStatus`, `BackendKeyData`)
+  is replayed to the client, after which the proxy reverts to a dumb
+  byte-level splice, exactly like passthrough mode.
+
+Entries without `user`/`password` are **passthrough**: exactly the
+original pgproxy behavior, where the client's own credentials flow
+through to the upstream. Use one as an escape hatch for admin access
+with personal credentials.
+
+Known limitation: the wire-protocol `CancelRequest` (psql Ctrl+C,
+driver context-cancel) is not relayed, so an in-flight query can't
+be aborted by the client that started it. Use `statement_timeout`
+on the role, or `pg_cancel_backend()` from another session — the
+injected `application_name` makes the offender easy to find in
+`pg_stat_activity`.
 
 ### Dev reference page
 
@@ -121,7 +171,8 @@ proxy. No credentials are ever shown — pgproxy never sees them.
 ### Flags added by this fork
 
 - `--destination-pg-dbs` — JSON array of `{name, listen, target}`
-  entries. Empty allowed.
+  entries, plus optional `{dbname, user, password}` for managed
+  (credential-injecting) entries. Empty allowed.
 - `--fly-listen-host` (default `[::]`) — host (no port) to bind Fly
   6PN listeners on. Empty disables Fly listeners.
 - `--http-proxy-listen` (default `[::]:8080`) — kernel TCP listen

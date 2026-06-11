@@ -99,6 +99,7 @@ type proxy struct {
 	upstreamCertPool *x509.CertPool
 	downstreamCert   []tls.Certificate
 	client           *local.Client
+	cfg              upstreamConfig // EXT: full entry; cfg.managed() picks the serve path
 
 	activeSessions  expvar.Int
 	startedSessions expvar.Int
@@ -179,10 +180,9 @@ var (
 	// that they want to do a TLS handshake. Servers should respond with
 	// the single byte "S" before starting a normal TLS handshake.
 	sslStart = [8]byte{0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f}
-	// plaintextStart is the magic bytes that postgres clients use to
-	// indicate that they're starting a plaintext authentication
-	// handshake.
-	plaintextStart = [8]byte{0, 0, 0, 86, 0, 3, 0, 0}
+	// EXT: the fixed plaintextStart constant is replaced by
+	// isPlaintextStartup (managed.go), which accepts any v3
+	// StartupMessage length instead of exactly 86 bytes.
 )
 
 // serve proxies the postgres client on c to the proxy's upstream,
@@ -207,6 +207,13 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 		log.Printf("%d: session end, from %s (machine %s, user %s), lasted %s", sessionID, c.RemoteAddr(), machine, user, elapsed.Round(time.Millisecond))
 	}()
 
+	// EXT BEGIN: managed upstreams authenticate to the upstream with
+	// configured credentials; everything below is the passthrough path.
+	if p.cfg.managed() {
+		return p.serveManaged(ctx, sessionID, c, injectAppName)
+	}
+	// EXT END
+
 	// Read the client's opening message, to figure out if it's trying
 	// to TLS or not.
 	var buf [8]byte
@@ -218,7 +225,7 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	switch {
 	case buf == sslStart:
 		clientIsTLS = true
-	case buf == plaintextStart:
+	case isPlaintextStartup(buf): // EXT: any v3 startup length
 		clientIsTLS = false
 	default:
 		p.errors.Add("client-bad-protocol", 1)

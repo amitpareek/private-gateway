@@ -9,10 +9,16 @@
 #   DESTINATION_PG_DBS    JSON array of Postgres databases. Example:
 #                           [
 #                             {"name":"rw","listen":5432,
-#                              "target":"ep-xxx.aws.neon.tech:5432"},
-#                             {"name":"readonly","listen":5433,
-#                              "target":"ep-yyy-pooler.aws.neon.tech:5432"}
+#                              "target":"ep-xxx.aws.neon.tech:5432",
+#                              "dbname":"main","user":"app_user",
+#                              "password":"..."},
+#                             {"name":"admin","listen":5439,
+#                              "target":"ep-xxx.aws.neon.tech:5432"}
 #                           ]
+#                         With user+password the entry is "managed":
+#                         the proxy logs in upstream itself and clients
+#                         connect credential-less. Without them it is a
+#                         passthrough (client needs real credentials).
 #                         May be empty on first launch; configure later
 #                         via `fly secrets set DESTINATION_PG_DBS='...'`.
 #   TS_HOSTNAME           Tailscale hostname. Default: $FLY_APP_NAME.

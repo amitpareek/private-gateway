@@ -126,12 +126,12 @@ func TestRewriteStartup_RejectsMalformed(t *testing.T) {
 		t.Errorf("expected error for length mismatch")
 	}
 
-	// v3 but no terminating null.
+	// v3 but no terminating null: the 8-byte body is fully occupied
+	// and its last byte is 'z', not 0.
 	noTerm := make([]byte, 16)
 	binary.BigEndian.PutUint32(noTerm[:4], 16)
 	binary.BigEndian.PutUint32(noTerm[4:8], pgProtoV3)
-	copy(noTerm[8:], []byte("user\x00x"))
-	// Last byte is 'x', not 0.
+	copy(noTerm[8:], []byte("user\x00xyz"))
 	if _, err := rewriteStartup(noTerm, "myapp"); err == nil {
 		t.Errorf("expected error for missing terminator")
 	}

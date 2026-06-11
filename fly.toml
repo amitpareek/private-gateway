@@ -13,11 +13,17 @@
 #
 #   fly secrets set DESTINATION_PG_DBS='[
 #     {"name":"rw","listen":5432,
-#      "target":"ep-xxx.aws.neon.tech:5432"},
-#     {"name":"readonly","listen":5433,
-#      "target":"ep-yyy-pooler.aws.neon.tech:5432"}
+#      "target":"ep-xxx.aws.neon.tech:5432",
+#      "dbname":"main","user":"app_user","password":"..."},
+#     {"name":"admin","listen":5439,
+#      "target":"ep-xxx.aws.neon.tech:5432"}
 #   ]'
 #   fly deploy
+#
+# Entries with user+password are "managed": the proxy authenticates
+# upstream itself and clients connect with no credentials, e.g.
+# postgres://pgproxy.internal:5432/mydb. Entries without are
+# passthrough (client supplies real upstream credentials).
 #
 # Use an *ephemeral + reusable* Tailscale auth key; state lives in
 # /tmp (tmpfs), so each restart re-auths.
