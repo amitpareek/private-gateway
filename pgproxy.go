@@ -70,6 +70,11 @@ func main() {
 		log.Fatalf("getting tsnet API client: %v", err)
 	}
 
+	// EXT: advertise Fly 6PN subnet routes / exit node if configured.
+	if err := advertiseTailscale(context.Background(), ts, tsclient); err != nil {
+		log.Fatalf("advertising tailscale routes: %v", err)
+	}
+
 	// EXT BEGIN: debug listener exists, but the per-upstream proxy
 	// creation, Expvar publication, and connection listeners are now
 	// driven by runProxies in extensions.go (one proxy per --upstream).

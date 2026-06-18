@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
 
@@ -71,7 +72,75 @@ var (
 	destinationPgDbs = flag.String("destination-pg-dbs", "", `JSON array of {"name","listen","target"} entries. Empty is allowed.`)
 	flyListenHost    = flag.String("fly-listen-host", "[::]", "Host (no port) to bind Fly 6PN listeners on. Empty disables Fly listeners.")
 	httpProxyListen  = flag.String("http-proxy-listen", "[::]:8080", "Kernel TCP listen address for the HTTPS CONNECT forward proxy. Empty disables.")
+
+	advertiseRoutes   = flag.String("advertise-routes", "", "Comma-separated CIDRs to advertise as a subnet router (e.g. Fly 6PN fdaa::/16). Empty advertises none.")
+	advertiseExitNode = flag.Bool("advertise-exit-node", false, "Advertise this node as a Tailscale exit node (adds 0.0.0.0/0 and ::/0).")
 )
+
+// advertiseTailscale configures this tsnet node as a subnet router
+// and/or exit node according to --advertise-routes and
+// --advertise-exit-node. tsnet runs netstack with ProcessSubnets and
+// ProcessLocalIPs enabled, so advertised traffic is actually forwarded
+// out via the host network — letting tailnet peers reach Fly 6PN
+// addresses (fdaa::/16) and, as an exit node, egress through this app's
+// fixed Fly IP.
+//
+// Routes/exit nodes still have to be approved in the tailnet before
+// they carry traffic: either tick them in the admin console or grant
+// the node's tags an autoApprovers ACL so approval is automatic.
+//
+// When nothing is advertised this is a no-op and the node starts lazily
+// via the first Listen, exactly as upstream pgproxy does.
+func advertiseTailscale(ctx context.Context, ts *tsnet.Server, tsclient *local.Client) error {
+	routes, err := parseAdvertiseRoutes(*advertiseRoutes)
+	if err != nil {
+		return err
+	}
+	if len(routes) == 0 && !*advertiseExitNode {
+		return nil
+	}
+
+	// Wait until the node is Running before editing prefs so the
+	// advertisement reliably reaches the control plane.
+	if _, err := ts.Up(ctx); err != nil {
+		return fmt.Errorf("bringing tailscale up: %w", err)
+	}
+
+	prefs := &ipn.Prefs{AdvertiseRoutes: routes}
+	if *advertiseExitNode {
+		prefs.SetAdvertiseExitNode(true) // appends 0.0.0.0/0 and ::/0
+	}
+	if _, err := tsclient.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:              *prefs,
+		AdvertiseRoutesSet: true,
+	}); err != nil {
+		return fmt.Errorf("advertising routes: %w", err)
+	}
+	log.Printf("advertising routes %v (exit node: %v)", prefs.AdvertiseRoutes, *advertiseExitNode)
+	return nil
+}
+
+// parseAdvertiseRoutes parses a comma-separated list of CIDRs. Empty or
+// whitespace yields a nil slice and no error.
+func parseAdvertiseRoutes(s string) ([]netip.Prefix, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %v", part, err)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
+}
 
 // parseDestinationPgDbs parses the --destination-pg-dbs flag value as
 // a JSON array of upstreamConfig and validates each entry. An empty
