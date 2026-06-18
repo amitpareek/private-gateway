@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -33,6 +34,27 @@ func TestParseAdvertiseRoutes(t *testing.T) {
 
 	if _, err := parseAdvertiseRoutes("not-a-cidr"); err == nil {
 		t.Errorf("expected error for invalid CIDR")
+	}
+}
+
+func TestRouteContains(t *testing.T) {
+	routes, err := parseAdvertiseRoutes("fdaa::/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		ip   string
+		want bool
+	}{
+		{"fdaa:74:505b:a7b:86e:790b:be2a:2", true}, // a 6PN app
+		{"fdaa::3", true},                          // fly resolver
+		{"fd7a:115c:a1e0::1", false},               // tailscale ULA
+		{"2606:4700:4700::1111", false},            // public
+	} {
+		ip := netip.MustParseAddr(tc.ip)
+		if got := routeContains(routes, ip); got != tc.want {
+			t.Errorf("routeContains(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
 	}
 }
 

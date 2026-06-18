@@ -115,6 +115,13 @@ func setupTailscaleRouter(ctx context.Context, ts *tsnet.Server, tsclient *local
 	if _, err := ts.Up(ctx); err != nil {
 		return fmt.Errorf("bringing tailscale up: %w", err)
 	}
+	st, err := tsclient.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("getting tailscale status: %w", err)
+	}
+	if len(st.TailscaleIPs) == 0 {
+		return fmt.Errorf("node has no Tailscale IPs yet")
+	}
 
 	if wantPrefs {
 		prefs := &ipn.Prefs{AdvertiseRoutes: routes}
@@ -128,14 +135,64 @@ func setupTailscaleRouter(ctx context.Context, ts *tsnet.Server, tsclient *local
 			return fmt.Errorf("advertising routes: %w", err)
 		}
 		log.Printf("advertising routes %v (exit node: %v)", prefs.AdvertiseRoutes, *advertiseExitNode)
+
+		// tsnet's netstack accepts forwarded packets but RSTs any TCP
+		// flow that has no local listener, so advertising a route is not
+		// enough on its own — without this, ping (ICMP) reaches 6PN apps
+		// but TCP (HTTP/Postgres) is refused. Proxy those flows out via
+		// the host network, which on Fly can reach fdaa::/16 natively.
+		ts.RegisterFallbackTCPHandler(subnetTCPForwarder(prefs.AdvertiseRoutes, st.TailscaleIPs))
+		log.Printf("forwarding TCP for advertised routes via the host network")
 	}
 
 	if wantDNS {
-		if err := serveFlyDNS(ctx, ts, tsclient, resolver); err != nil {
+		if err := serveFlyDNS(st.TailscaleIPs, ts, resolver); err != nil {
 			return fmt.Errorf("serving DNS: %w", err)
 		}
 	}
 	return nil
+}
+
+// subnetTCPForwarder returns a tsnet fallback handler that proxies TCP
+// flows destined for one of the advertised routes out via the host
+// network. Flows to the node's own Tailscale IPs (or outside the routes)
+// are left for the default reject path. This is what makes tsnet usable
+// as a TCP subnet router / exit node despite its userspace stack.
+func subnetTCPForwarder(routes []netip.Prefix, selfIPs []netip.Addr) tsnet.FallbackTCPHandler {
+	self := make(map[netip.Addr]bool, len(selfIPs))
+	for _, ip := range selfIPs {
+		self[ip.Unmap()] = true
+	}
+	return func(src, dst netip.AddrPort) (func(net.Conn), bool) {
+		ip := dst.Addr().Unmap()
+		if self[ip] || !routeContains(routes, ip) {
+			return nil, false // not ours; let the default path reject it
+		}
+		target := dst.String()
+		return func(c net.Conn) {
+			defer c.Close()
+			up, err := net.DialTimeout("tcp", target, 10*time.Second)
+			if err != nil {
+				log.Printf("subnet TCP forward to %s: %v", target, err)
+				return
+			}
+			defer up.Close()
+			done := make(chan struct{}, 2)
+			go func() { io.Copy(up, c); done <- struct{}{} }()
+			go func() { io.Copy(c, up); done <- struct{}{} }()
+			<-done
+		}, true
+	}
+}
+
+// routeContains reports whether ip falls within any of the prefixes.
+func routeContains(routes []netip.Prefix, ip netip.Addr) bool {
+	for _, r := range routes {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // serveFlyDNS listens on every Tailscale IP of the node (port 53, both
@@ -144,15 +201,8 @@ func setupTailscaleRouter(ctx context.Context, ts *tsnet.Server, tsclient *local
 // shuttle bytes — so no DNS library is needed. Point Tailscale split DNS
 // at one of these IPs for the "internal" search domain and *.internal
 // names resolve to their 6PN addresses.
-func serveFlyDNS(ctx context.Context, ts *tsnet.Server, tsclient *local.Client, resolverAddr string) error {
-	st, err := tsclient.Status(ctx)
-	if err != nil {
-		return fmt.Errorf("getting tailscale status: %w", err)
-	}
-	if len(st.TailscaleIPs) == 0 {
-		return fmt.Errorf("node has no Tailscale IPs yet")
-	}
-	for _, ip := range st.TailscaleIPs {
+func serveFlyDNS(ips []netip.Addr, ts *tsnet.Server, resolverAddr string) error {
+	for _, ip := range ips {
 		addr := net.JoinHostPort(ip.String(), "53")
 
 		pc, err := ts.ListenPacket("udp", addr)
