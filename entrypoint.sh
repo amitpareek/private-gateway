@@ -31,6 +31,13 @@
 #   TS_ADVERTISE_EXIT_NODE  "true"/"false" — advertise this node as a Tailscale
 #                         exit node (egress via this app's fixed Fly IP).
 #                         Default: true.
+#   FLY_DNS_RESOLVER      Fly internal DNS resolver to forward queries to.
+#                         Default: [fdaa::3]:53. When set, the proxy serves
+#                         DNS on its Tailscale IPs (:53) so tailnet clients
+#                         with split DNS can resolve *.internal. Set empty to
+#                         disable. Pair with Tailscale split DNS: add this
+#                         node's Tailscale IP as a nameserver restricted to
+#                         the "internal" search domain.
 #   UPSTREAM_CA_FILE      CA bundle. Default: /etc/ssl/certs/ca-certificates.crt
 #   STATE_DIR             tsnet state dir. Default: /tmp/tsnet
 #
@@ -46,6 +53,7 @@ DEFAULT_HOSTNAME="${FLY_REGION:+${FLY_REGION}.}${FLY_APP_NAME:-pgproxy}"
 TS_HOSTNAME="${TS_HOSTNAME:-$DEFAULT_HOSTNAME}"
 TS_ADVERTISE_ROUTES="${TS_ADVERTISE_ROUTES-fdaa::/16}"
 TS_ADVERTISE_EXIT_NODE="${TS_ADVERTISE_EXIT_NODE:-true}"
+FLY_DNS_RESOLVER="${FLY_DNS_RESOLVER-[fdaa::3]:53}"
 UPSTREAM_CA_FILE="${UPSTREAM_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}"
 STATE_DIR="${STATE_DIR:-/tmp/tsnet}"
 
@@ -55,6 +63,7 @@ exec /pgproxy \
   --hostname="$TS_HOSTNAME" \
   --advertise-routes="$TS_ADVERTISE_ROUTES" \
   --advertise-exit-node="$TS_ADVERTISE_EXIT_NODE" \
+  --fly-dns-resolver="$FLY_DNS_RESOLVER" \
   --upstream-ca-file="$UPSTREAM_CA_FILE" \
   --state-dir="$STATE_DIR" \
   --destination-pg-dbs="${DESTINATION_PG_DBS:-}"
