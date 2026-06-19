@@ -1,13 +1,13 @@
 #!/bin/sh
-# Orchestrator: bring up the Tailscale layer, then hand off to the Fly/
-# proxy layer. Thin glue only — Tailscale logic lives in tailscale-up.sh,
-# proxy logic in the pgproxy binary. All config is env-driven; see
-# project.md for the full table and defaults.
+# Orchestrator: bring up the fly-router (Tailscale) layer, then hand off
+# to the Fly/proxy layer. Thin glue only — router logic lives in
+# fly-router.sh, proxy logic in the pgproxy binary. All config is
+# env-driven; see project.md for the full table and defaults.
 set -e
 
-# Tailscale layer (subnet router + exit node). Backgrounded tailscaled
-# survives the exec below by reparenting to pgproxy (PID 1).
-/tailscale-up.sh
+# fly-router layer (Tailscale subnet router + exit node). Backgrounded
+# tailscaled survives the exec below by reparenting to pgproxy (PID 1).
+/fly-router.sh
 
 # Fly / proxy layer. Map env -> flags (the binary has no Tailscale flags).
 exec /pgproxy \

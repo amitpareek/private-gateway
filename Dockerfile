@@ -1,6 +1,6 @@
 # go.mod requires go >= 1.24. The pgproxy binary is pure Fly/proxy and
 # has no Tailscale dependency; Tailscale runs as a separate daemon at
-# runtime (see tailscale-up.sh).
+# runtime (see fly-router.sh, modeled on fly-apps/tailscale-router).
 FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
@@ -16,8 +16,8 @@ RUN apk add --no-cache ca-certificates tailscale iptables ip6tables
 
 COPY --from=build /out/pgproxy /pgproxy
 COPY entrypoint.sh /entrypoint.sh
-COPY tailscale-up.sh /tailscale-up.sh
-RUN chmod +x /entrypoint.sh /tailscale-up.sh
+COPY fly-router.sh /fly-router.sh
+RUN chmod +x /entrypoint.sh /fly-router.sh
 
 # 5432 = Postgres (Fly 6PN; reachable from the tailnet via the subnet router)
 # 8080 = HTTPS CONNECT forward proxy (Fly 6PN only)

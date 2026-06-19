@@ -26,9 +26,10 @@ Fly egress IP) plus a small dev/reference page. It's a fork kept close to upstre
   - `httpproxy.go` — HTTPS `CONNECT` forward proxy.
   - `managed.go`   — managed credential injection.
   - `flydns.go`    — `.internal` DNS forwarder → Fly resolver (`fdaa::3`).
-- **Tailscale (shell/Docker, NOT Go):**
-  - `tailscale-up.sh` + Dockerfile install lines — all `tailscaled` / `tailscale up` logic.
-  - `entrypoint.sh` — thin orchestration only (start Tailscale, then `exec pgproxy`).
+- **Tailscale / fly-router (shell/Docker, NOT Go):**
+  - `fly-router.sh` + Dockerfile install lines — all `tailscaled` / `tailscale up` logic
+    (the Fly subnet-router setup; modeled on `fly-apps/tailscale-router`).
+  - `entrypoint.sh` — thin orchestration only (run `fly-router.sh`, then `exec pgproxy`).
 
 Rule: **Tailscale logic lives in shell/Docker; the Go binary has no Tailscale dependency.**
 Do not re-introduce `tsnet` into the Go code.

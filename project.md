@@ -44,10 +44,10 @@ target's 6PN listener.
 
 | Layer | Files | Contains |
 |---|---|---|
-| Tailscale (launch only) | `tailscale-up.sh`, Dockerfile install | derive `/48`, `sysctl ip_forward`, `tailscaled`, `tailscale up …` |
+| fly-router / Tailscale (launch only) | `fly-router.sh`, Dockerfile install | derive `/48`, `sysctl ip_forward`, `tailscaled`, `tailscale up …` (modeled on `fly-apps/tailscale-router`) |
 | Fly / proxy (Go) | `pgproxy.go`, `extensions.go`, `httpproxy.go`, `managed.go` | 6PN proxy, dev page, `classifyPeer`, Fly attribution |
 | Fly DNS bridge (Go) | `flydns.go` | `.internal` forwarder → `fdaa::3` |
-| Orchestrator | `entrypoint.sh` | run `tailscale-up.sh`, then `exec pgproxy` |
+| Orchestrator | `entrypoint.sh` | run `fly-router.sh`, then `exec pgproxy` |
 
 Rule: **Tailscale = shell/Docker; Fly = Go.** They never mix in one file.
 
@@ -116,6 +116,6 @@ early during implementation.
 
 - `main` @ `d0858c9` — tsnet-based (pre-migration).
 - Branch `approach-b` — Approach B implemented: Go is 6PN-only (no `tailscale.com`),
-  `flydns.go` added, `tailscale-up.sh` + orchestrator `entrypoint.sh` + Dockerfile install
+  `flydns.go` added, `fly-router.sh` + orchestrator `entrypoint.sh` + Dockerfile install
   tailscale. `go build`/`vet`/`test` pass; shell syntax checked.
 - Next — deploy-verify on Fly (TUN + `ip_forward`), then merge to `main`.
