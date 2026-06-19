@@ -1,14 +1,15 @@
 # Fly.io configuration for pgproxy.
 #
-# pgproxy runs a real tailscaled (TUN) as a Fly 6PN subnet router + exit
-# node, alongside a 6PN-only Postgres proxy. Tailnet users reach Fly apps
-# (incl. pgproxy) via *.internal once split DNS is configured. See
-# project.md for the architecture and the full config table.
+# pgproxy is a Fly 6PN Postgres proxy. Setting the TS_AUTHKEY secret also
+# turns it into a real tailscaled (TUN) subnet router + exit node, so the
+# tailnet can reach Fly apps (incl. pgproxy) via *.internal once split DNS
+# is configured. Omit TS_AUTHKEY for a plain 6PN-only proxy. See project.md
+# for the architecture and the full config table.
 #
 # Before first deploy:
 #
 #   fly apps create pgproxy
-#   fly secrets set TS_AUTHKEY="tskey-auth-..."        # ephemeral+reusable+tagged
+#   fly secrets set TS_AUTHKEY="tskey-auth-..."        # ephemeral+reusable+tagged; omit for 6PN-only
 #   fly deploy
 #
 # Then, one-time in the Tailscale admin console:
@@ -32,8 +33,8 @@ primary_region = "sin"
   dockerfile = "Dockerfile"
 
 [env]
-  # Zero-config: the only required setting is TS_AUTHKEY (a secret — set via
-  # `fly secrets set`, not here). Every other knob has a default in
+  # Zero-config: set TS_AUTHKEY (a secret, via `fly secrets set`) to enable
+  # Tailscale; omit it for a 6PN-only proxy. Every other knob has a default in
   # fly-router.sh / the binary; the full list with rationale is in project.md.
   # Set a var here only to override a default, e.g.:
   #

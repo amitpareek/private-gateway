@@ -16,11 +16,21 @@
 #   entrypoint.sh  this orchestrator
 set -e
 
+# Tailscale is enabled iff TS_AUTHKEY is set. Capture that as a bool to
+# pass the proxy, so the binary keeps no knowledge of the secret.
+TS_ENABLED=false
+[ -n "${TS_AUTHKEY:-}" ] && TS_ENABLED=true
+
 # fly-router layer (Tailscale subnet router + exit node). Backgrounded
 # tailscaled survives the exec below by reparenting to pgproxy (PID 1).
+# No-op when TS_AUTHKEY is unset.
 /fly-router.sh
 
-# Fly / proxy layer. Map env -> flags (the binary has no Tailscale flags).
+# Drop the auth key before handing off — the proxy never needs it.
+unset TS_AUTHKEY
+
+# Fly / proxy layer. Map env -> flags (the binary has no Tailscale flags
+# beyond the derived --tailscale-enabled bool).
 exec /pgproxy \
   --debug-port="${DEBUG_PORT:-80}" \
   --upstream-ca-file="${UPSTREAM_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" \
@@ -28,4 +38,5 @@ exec /pgproxy \
   --http-proxy-listen="${HTTP_PROXY_LISTEN:-[::]:8080}" \
   --dns-resolver="${DNS_RESOLVER:-}" \
   --tailscaled-socket="${TS_SOCKET:-/var/run/tailscale/tailscaled.sock}" \
+  --tailscale-enabled="$TS_ENABLED" \
   --destination-pg-dbs="${DESTINATION_PG_DBS:-}"

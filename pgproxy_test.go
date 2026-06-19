@@ -180,9 +180,11 @@ func TestParseVmsTXT(t *testing.T) {
 }
 
 func TestClassifyPeer(t *testing.T) {
-	// On Fly: 6PN is trusted, Tailscale always trusted.
+	// On Fly with Tailscale enabled: 6PN trusted, Tailscale trusted.
 	defer func(prev bool) { onFly = prev }(onFly)
+	defer func(prev bool) { *tailscaleEnabled = prev }(*tailscaleEnabled)
 	onFly = true
+	*tailscaleEnabled = true
 	cases := []struct {
 		addr string
 		want peerKind
@@ -202,14 +204,28 @@ func TestClassifyPeer(t *testing.T) {
 }
 
 func TestClassifyPeer_OffFlyRejects6PN(t *testing.T) {
-	// Off Fly, the 6PN range is NOT trusted; Tailscale still is.
+	// Off Fly (but Tailscale enabled): 6PN NOT trusted; Tailscale still is.
 	defer func(prev bool) { onFly = prev }(onFly)
+	defer func(prev bool) { *tailscaleEnabled = prev }(*tailscaleEnabled)
 	onFly = false
+	*tailscaleEnabled = true
 	if got := classifyPeer("[fdaa:0:1:2::3]:5432"); got != peerReject {
 		t.Errorf("off-Fly fdaa = %v, want reject", got)
 	}
 	if got := classifyPeer("100.64.1.2:5432"); got != peerTailscale {
 		t.Errorf("off-Fly tailscale = %v, want tailscale", got)
+	}
+}
+
+func TestClassifyPeer_TailscaleDisabledRejectsTailscale(t *testing.T) {
+	// Tailscale disabled (no TS_AUTHKEY): its ranges are not trusted.
+	defer func(prev bool) { *tailscaleEnabled = prev }(*tailscaleEnabled)
+	*tailscaleEnabled = false
+	if got := classifyPeer("100.64.1.2:5432"); got != peerReject {
+		t.Errorf("tailscale-disabled 100.64 = %v, want reject", got)
+	}
+	if got := classifyPeer("[fd7a:115c:a1e0::1]:5432"); got != peerReject {
+		t.Errorf("tailscale-disabled fd7a = %v, want reject", got)
 	}
 }
 

@@ -63,15 +63,16 @@ Rule: **Tailscale = shell/Docker; Fly = Go.** They never mix in one file.
 
 ## Configuration
 
-All config is env-driven. A bare deploy needs only `TS_AUTHKEY`; everything else has a
+All config is env-driven. Setting `TS_AUTHKEY` enables Tailscale (omit it for a plain
+Fly 6PN proxy); everything else has a
 default chosen for how we run today. Set non-secrets in `fly.toml [env]`, secrets via
 `fly secrets set`.
 
-### Required (secret)
+### Tailscale on/off (secret)
 
 | Env | Default | Why |
 |---|---|---|
-| `TS_AUTHKEY` | — (required) | The node can't join the tailnet without it; use ephemeral+reusable so dead nodes self-clean. |
+| `TS_AUTHKEY` | — (unset = Tailscale off) | Presence is the on-switch for Tailscale: with it, `fly-router.sh` brings up `tailscaled` and the proxy trusts tailnet sources; without it, Tailscale is skipped and pgproxy is a plain Fly 6PN proxy. Use ephemeral+reusable so dead nodes self-clean. The entrypoint surfaces presence as `--tailscale-enabled` and drops the secret before exec'ing the proxy. |
 
 ### Common (good defaults; override only to change behavior)
 
@@ -112,6 +113,9 @@ do not set these.
   a Tailscale IP exists. See Decisions.
 
 ## Deployment (one-time Tailscale setup)
+
+Only needed if you're enabling Tailscale (i.e. setting `TS_AUTHKEY`); skip it entirely
+for a plain 6PN proxy.
 
 - Create an ephemeral + reusable + tagged auth key → `fly secrets set TS_AUTHKEY=…`.
 - Approve the advertised routes in the admin console, or grant an `autoApprovers` ACL to the

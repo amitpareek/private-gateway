@@ -43,7 +43,12 @@
 # the rationale for each lives in project.md.
 set -e
 
-: "${TS_AUTHKEY:?TS_AUTHKEY must be set (use an ephemeral+reusable+tagged key)}"
+# Tailscale is optional: with no TS_AUTHKEY we skip it entirely and pgproxy
+# runs as a plain (Fly 6PN) proxy. Use an ephemeral+reusable+tagged key.
+if [ -z "${TS_AUTHKEY:-}" ]; then
+  echo "fly-router: TS_AUTHKEY not set — Tailscale disabled, running proxy only"
+  exit 0
+fi
 
 # ─── Defaults (see project.md for the "why" of each) ────────────────────
 TS_STATE_DIR="${TS_STATE_DIR:-/tmp/tailscale}"      # tmpfs → ephemeral; re-auths each restart

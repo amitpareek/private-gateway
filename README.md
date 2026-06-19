@@ -19,12 +19,13 @@ See [project.md](project.md) for architecture and the full config reference;
 
 ## Quickstart
 
-Only one secret is required — **`TS_AUTHKEY`**. Everything else has a sensible
-default.
+Setting **`TS_AUTHKEY`** enables the Tailscale router/exit-node; everything else
+has a sensible default. **`TS_AUTHKEY` is optional** — omit it and pgproxy runs as
+a plain Fly 6PN proxy (reachable by Fly apps over 6PN, just not over the tailnet).
 
 ```sh
 fly apps create pgproxy
-fly secrets set TS_AUTHKEY="tskey-auth-..."   # ephemeral + reusable + tagged
+fly secrets set TS_AUTHKEY="tskey-auth-..."   # ephemeral + reusable + tagged; omit for 6PN-only
 fly deploy
 ```
 
@@ -60,7 +61,7 @@ var only to change it. Non-secrets go in `fly.toml [env]`; secrets via
 | **DNS self → Tailscale** | _(automatic)_ | on when `FLY_APP_NAME` is set | Answers *this app's* own `*.internal` with the node's **Tailscale IP**, so tailnet clients reach pgproxy directly over Tailscale (identifiable). Auto-detected on Fly; no env var. See Identity. |
 | **Hostname** | `TS_HOSTNAME` | `<machineid>-<region>-<app>` | e.g. `148e21-sin-pgproxy`. Dashes, not dots — Tailscale MagicDNS converts dots to dashes anyway. The machine id keeps every ephemeral node uniquely named. |
 
-Required: `TS_AUTHKEY` (secret). Optional: `DESTINATION_PG_DBS` (secret). Advanced
+`TS_AUTHKEY` (secret) enables Tailscale (omit for a 6PN-only proxy). Optional: `DESTINATION_PG_DBS` (secret). Advanced
 knobs (`TS_ACCEPT_DNS`, `TS_SNAT_SUBNET_ROUTES`, `TS_STATE_DIR`, `TS_SOCKET`,
 `UPSTREAM_CA_FILE`, `FLY_LISTEN_HOST`, `HTTP_PROXY_LISTEN`, `DEBUG_PORT`, …) are
 listed with rationale in [project.md](project.md).

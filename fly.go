@@ -80,6 +80,7 @@ var (
 	flyListenHost    = flag.String("fly-listen-host", "[::]", "Host (no port) to bind Fly 6PN listeners on. Empty disables Fly listeners.")
 	httpProxyListen  = flag.String("http-proxy-listen", "[::]:8080", "Kernel TCP listen address for the HTTPS CONNECT forward proxy. Empty disables.")
 	tailscaledSocket = flag.String("tailscaled-socket", "/var/run/tailscale/tailscaled.sock", "Path to the local tailscaled API socket, used to WhoIs Tailscale clients for application_name. No-op if absent.")
+	tailscaleEnabled = flag.Bool("tailscale-enabled", false, "Whether Tailscale is running (set by entrypoint from TS_AUTHKEY presence). When false, Tailscale source ranges are not trusted.")
 )
 
 // parseDestinationPgDbs parses the --destination-pg-dbs flag value as
@@ -373,10 +374,9 @@ var onFly = os.Getenv("FLY_APP_NAME") != ""
 
 // classifyPeer returns the peerKind for a remote address string of the
 // form "host:port" or "[ipv6]:port". Trusted sources are auto-detected:
-// Tailscale ranges are always accepted (they're Tailscale-exclusive, so
-// trusting them is harmless when Tailscale isn't in use), and Fly 6PN
-// (fdaa::/16) is accepted only when running on Fly. Everything else is
-// rejected — so off Fly, the tailnet is the access path.
+// Tailscale ranges are accepted when Tailscale is enabled (TS_AUTHKEY was
+// set, surfaced as --tailscale-enabled), and Fly 6PN (fdaa::/16) is
+// accepted only when running on Fly. Everything else is rejected.
 //
 // Note on attribution: traffic forwarded through the subnet router from
 // the tailnet is SNATed to a 6PN address, so it classifies as peerFly.
@@ -396,7 +396,7 @@ func classifyPeer(remote string) peerKind {
 	switch {
 	case onFly && flyPrefix.Contains(ip):
 		return peerFly
-	case tailscaleV4.Contains(ip), tailscaleV6.Contains(ip):
+	case *tailscaleEnabled && (tailscaleV4.Contains(ip) || tailscaleV6.Contains(ip)):
 		return peerTailscale
 	}
 	return peerReject
