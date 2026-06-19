@@ -28,6 +28,15 @@
 #   device + kernel ip_forward forwards every protocol, which is the
 #   whole point of this design.
 #
+# This is the Tailscale layer. Its sibling, the Fly/proxy layer, is the
+# `pgproxy` Go binary:
+#   pgproxy.go    pure Postgres wire proxy (strict upstream TLS)
+#   managed.go    managed mode: proxy logs in upstream, clients credential-less
+#   httpproxy.go  HTTPS CONNECT forward proxy (fixed Fly egress IP)
+#   extensions.go Fly config, dev page, source gating, application_name
+#   fly-router.go .internal DNS forwarder -> Fly resolver (Go half of fly-router)
+# entrypoint.sh runs this script, then exec's pgproxy. See project.md.
+#
 # Config is env-driven (TS_* vars). Defaults below are what we run today;
 # the rationale for each lives in project.md.
 set -e

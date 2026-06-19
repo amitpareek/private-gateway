@@ -42,12 +42,23 @@ target's 6PN listener.
 
 ## Code segregation
 
-| Layer | Files | Contains |
-|---|---|---|
-| fly-router / Tailscale (launch only) | `fly-router.sh`, Dockerfile install | derive `/48`, `sysctl ip_forward`, `tailscaled`, `tailscale up …` (modeled on `fly-apps/tailscale-router`) |
-| Fly / proxy (Go) | `pgproxy.go`, `extensions.go`, `httpproxy.go`, `managed.go` | 6PN proxy, dev page, `classifyPeer`, Fly attribution |
-| fly-router DNS (Go) | `fly-router.go` | `.internal` forwarder → `fdaa::3` (Go half of the fly-router feature) |
-| Orchestrator | `entrypoint.sh` | run `fly-router.sh`, then `exec pgproxy` |
+**Fly / proxy layer — the `pgproxy` Go binary (no `tailscale.com` import):**
+
+| File | Role |
+|---|---|
+| `pgproxy.go` | Pure Postgres wire proxy: strict upstream TLS + serve loop. Upstream-faithful; customizations are `// EXT` hooks. |
+| `managed.go` | Credential management ("managed" mode): the proxy authenticates to the upstream itself so clients connect credential-less. |
+| `httpproxy.go` | HTTPS `CONNECT` forward proxy (outbound via the fixed Fly egress IP). |
+| `extensions.go` | Fly glue: multi-DB config parsing, dev page, source gating (`classifyPeer`), `application_name` attribution (Fly PTR/TXT). |
+| `fly-router.go` | `.internal` DNS forwarder → Fly resolver (`fdaa::3`). Go half of the fly-router feature. |
+
+**fly-router / Tailscale layer — shell/Docker (no Go):**
+
+| File | Role |
+|---|---|
+| `fly-router.sh` | Derive the org `/48`, `sysctl ip_forward`, start `tailscaled`, `tailscale up` (advertise routes + exit node). Modeled on `fly-apps/tailscale-router`. |
+| Dockerfile | Builds the binary; installs `tailscale` + `iptables`/`ip6tables`; bundles the scripts. |
+| `entrypoint.sh` | Orchestrator: run `fly-router.sh`, then `exec pgproxy`. |
 
 Rule: **Tailscale = shell/Docker; Fly = Go.** They never mix in one file.
 

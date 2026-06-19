@@ -1,6 +1,14 @@
-# go.mod requires go >= 1.24. The pgproxy binary is pure Fly/proxy and
-# has no Tailscale dependency; Tailscale runs as a separate daemon at
-# runtime (see fly-router.sh, modeled on fly-apps/tailscale-router).
+# pgproxy image. Two layers run side by side at runtime:
+#   - Fly/proxy (the `pgproxy` Go binary): pgproxy.go (pure Postgres wire
+#     proxy), managed.go (credential-injection mode), httpproxy.go (HTTPS
+#     CONNECT proxy), extensions.go (Fly config/dev page/source gating/
+#     application_name), fly-router.go (.internal DNS forwarder).
+#   - fly-router (Tailscale): fly-router.sh runs tailscaled as a subnet
+#     router + exit node (modeled on fly-apps/tailscale-router).
+# entrypoint.sh wires them together. See project.md.
+#
+# go.mod requires go >= 1.24. The pgproxy binary has NO Tailscale
+# dependency; Tailscale runs only as the separate runtime daemon.
 FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
