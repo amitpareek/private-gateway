@@ -63,17 +63,33 @@ import (
 // ignored; only the database name is honored). Without credentials
 // the entry is a passthrough, exactly like upstream pgproxy.
 type upstreamConfig struct {
-	Name     string `json:"name"`
-	Listen   int    `json:"listen"`
-	Target   string `json:"target"`             // host:port
-	DBName   string `json:"dbname,omitempty"`   // managed: default database
-	User     string `json:"user,omitempty"`     // managed: upstream role
-	Password string `json:"password,omitempty"` // managed: upstream password
+	Name     string   `json:"name"`
+	Listen   int      `json:"listen"`
+	Target   string   `json:"target"`             // host:port
+	DBName   string   `json:"dbname,omitempty"`   // managed: default database
+	User     string   `json:"user,omitempty"`     // managed: upstream role
+	Password string   `json:"password,omitempty"` // managed: upstream password
+	Allow    []string `json:"allow,omitempty"`    // Tailscale logins allowed (empty = anyone); Fly 6PN ignores it
 }
 
 // managed reports whether the proxy holds credentials for this
 // upstream and should authenticate on the client's behalf.
 func (u upstreamConfig) managed() bool { return u.User != "" }
+
+// allows reports whether a Tailscale user may use this entry. An empty
+// Allow list means no restriction. Matching is case-insensitive. Only
+// consulted for Tailscale clients — Fly 6PN connections bypass it.
+func (u upstreamConfig) allows(user string) bool {
+	if len(u.Allow) == 0 {
+		return true
+	}
+	for _, a := range u.Allow {
+		if strings.EqualFold(strings.TrimSpace(a), user) {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	destinationPgDbs = flag.String("destination-pg-dbs", "", `JSON array of {"name","listen","target"} entries. Empty is allowed.`)

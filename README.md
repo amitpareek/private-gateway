@@ -97,6 +97,24 @@ The proxy stamps `application_name` so you can attribute traffic in
   over Tailscale — their real source IP is preserved for WhoIs, instead of being SNAT'd
   to the router on the 6PN path.
 
+## Per-port access (Tailscale only)
+
+Give a `DESTINATION_PG_DBS` entry an `allow` list to restrict which **Tailscale**
+users may use that port — handy for "5432 = prod, 5433 = read-only" splits:
+
+```jsonc
+{"name":"prod","listen":5432,"target":"…","user":"app_rw","password":"…","allow":["alice@example.com"]}
+```
+
+- Empty/absent `allow` → anyone (current behavior).
+- Matched by tailnet **login**, case-insensitive; a user not on the list (or one WhoIs
+  can't identify) is refused.
+- **Fly 6PN apps ignore `allow`** entirely — it only gates tailnet users.
+
+The port's actual privileges (read-only, limited writes) come from the **upstream
+Postgres role** you point `user` at (`GRANT`/`REVOKE`); `allow` only controls *who may
+connect to that port*.
+
 ## Runtime requirements
 
 The machine needs a TUN device (`/dev/net/tun`) and a writable `ip_forward`

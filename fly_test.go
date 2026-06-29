@@ -356,3 +356,21 @@ func TestDNSIsSelfDisabledByDefault(t *testing.T) {
 		t.Errorf("self-match should be off when dnsSelfSuffix is empty")
 	}
 }
+
+func TestUpstreamConfigAllows(t *testing.T) {
+	open := upstreamConfig{} // no Allow → anyone
+	if !open.allows("alice@x.com") || !open.allows("") {
+		t.Errorf("empty Allow should permit anyone")
+	}
+	restricted := upstreamConfig{Allow: []string{"alice@x.com", " Bob@X.com "}}
+	for _, u := range []string{"alice@x.com", "ALICE@x.com", "bob@x.com"} {
+		if !restricted.allows(u) {
+			t.Errorf("allows(%q) = false, want true", u)
+		}
+	}
+	for _, u := range []string{"carol@x.com", "tailscale-unknown", ""} {
+		if restricted.allows(u) {
+			t.Errorf("allows(%q) = true, want false", u)
+		}
+	}
+}

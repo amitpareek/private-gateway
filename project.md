@@ -49,7 +49,7 @@ target's 6PN listener.
 | `pgproxy.go` | Pure Postgres wire proxy: strict upstream TLS + serve loop. Upstream-faithful; customizations are `// EXT` hooks. |
 | `credentials-manager.go` | Credential management ("managed" mode): the proxy authenticates to the upstream itself so clients connect credential-less. Also the shared StartupMessage read/detect helpers. |
 | `httpproxy.go` | HTTPS `CONNECT` forward proxy (outbound via the fixed Fly egress IP). |
-| `fly.go` | All Fly glue: multi-DB config, `runProxies` bootstrap, dev page, source gating (`classifyPeer`, auto-trusts Tailscale always + Fly 6PN when `onFly`), `application_name` attribution (Fly PTR/TXT + Tailscale WhoIs over the local socket + StartupMessage rewrite), and the `.internal` DNS forwarder with the self → Tailscale-IP rewrite (Go companion to `fly-router.sh`). |
+| `fly.go` | All Fly glue: multi-DB config (incl. per-entry `allow` lists), `runProxies` bootstrap, dev page, source gating (`classifyPeer` — Fly 6PN when `onFly`, Tailscale ranges when `--tailscale-enabled`), `application_name` attribution (Fly PTR/TXT + Tailscale WhoIs over the local socket + StartupMessage rewrite), and the `.internal` DNS forwarder with the self → Tailscale-IP rewrite (Go companion to `fly-router.sh`). |
 
 **fly-router / Tailscale layer — shell/Docker (no Go):**
 
@@ -104,9 +104,10 @@ Fly injects `FLY_APP_NAME`, `FLY_REGION`, `FLY_MACHINE_ID`, `FLY_PRIVATE_IP` aut
 do not set these.
 
 **No env var (auto-detected via `FLY_APP_NAME` = "on Fly"):**
-- **Trusted sources** (`classifyPeer`): Tailscale ranges are *always* accepted (they're
-  Tailscale-exclusive, so harmless when unused); Fly 6PN (`fdaa::/16`) is accepted *only on
-  Fly*. So off-Fly the tailnet is the access path — nothing to configure.
+- **Trusted sources** (`classifyPeer`): Tailscale ranges are accepted when Tailscale is
+  enabled (`TS_AUTHKEY` set → `--tailscale-enabled`); Fly 6PN (`fdaa::/16`) is accepted *only
+  on Fly*. Everything else is rejected. Per-entry `allow` lists further restrict *which*
+  Tailscale users may use a given port (login match; Fly 6PN bypasses it).
 - **`DNS_RESOLVER`** defaults to Fly's `[fdaa::3]:53` on Fly, empty (forwarder off) elsewhere.
 - **DNS self-rewrite** (answer own `*.internal` with the node's Tailscale IP) is on whenever
   `FLY_APP_NAME` is present and the forwarder is running. Falls back to plain forwarding until

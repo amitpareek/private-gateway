@@ -170,6 +170,12 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	if err != nil {
 		return err
 	}
+	// EXT: per-db allow-list, Tailscale-only. Fly 6PN clients bypass it;
+	// a Tailscale user must be on the entry's allow list (empty = anyone).
+	if fromTS && !p.cfg.allows(user) {
+		p.errors.Add("unauthorized-user", 1)
+		return fmt.Errorf("tailscale user %q not allowed for db %q", user, p.cfg.Name)
+	}
 	// EXT END
 
 	log.Printf("%d: session start, from %s (machine %s, user %s)", sessionID, c.RemoteAddr(), machine, user)

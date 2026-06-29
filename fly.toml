@@ -16,11 +16,14 @@
 #   - approve the advertised routes (or grant an autoApprovers ACL to the tag)
 #   - split DNS: "internal" search domain -> this node's Tailscale IP
 #
-# Add databases later (secret; contains passwords):
+# Add databases later (secret; contains passwords). An optional "allow"
+# list restricts which *Tailscale* users may use that port (by login;
+# empty = anyone; Fly 6PN apps ignore it):
 #   fly secrets set DESTINATION_PG_DBS='[
-#     {"name":"rw","listen":5432,"target":"ep-xxx.aws.neon.tech:5432",
-#      "dbname":"main","user":"app_user","password":"..."},
-#     {"name":"admin","listen":5439,"target":"ep-xxx.aws.neon.tech:5432"}
+#     {"name":"prod","listen":5432,"target":"ep-xxx.aws.neon.tech:5432",
+#      "dbname":"main","user":"app_rw","password":"...","allow":["alice@example.com"]},
+#     {"name":"readonly","listen":5433,"target":"ep-xxx.aws.neon.tech:5432",
+#      "dbname":"main","user":"app_ro","password":"..."}
 #   ]'
 #   fly deploy
 #
