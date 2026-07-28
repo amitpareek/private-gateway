@@ -59,6 +59,7 @@ var only to change it. Non-secrets go in `fly.toml [env]`; secrets via
 | **Exit node** | `TS_ADVERTISE_EXIT_NODE` | `true` | each machine is a region-specific exit node |
 | **`.internal` DNS** | `DNS_RESOLVER` | `[fdaa::3]:53` on Fly, off elsewhere | forwards `*.internal` to this resolver; auto-set on Fly, set explicitly on other providers, empty disables |
 | **DNS self → Tailscale** | _(automatic)_ | on when `FLY_APP_NAME` is set | Answers *this app's* own `*.internal` with the node's **Tailscale IP**, so tailnet clients reach pgproxy directly over Tailscale (identifiable). Auto-detected on Fly; no env var. See Identity. |
+| **`<app>.<env>` alias** | `ALIAS_DOMAIN` / `INTERNAL_DOMAIN` | off (`ALIAS_DOMAIN` empty) | Maps `<app>.<env>` (e.g. `core.prod`) to `<app>.<internal-domain>`, resolves it via `DNS_RESOLVER`, and answers under the alias name. `INTERNAL_DOMAIN` defaults to `internal` on Fly, empty (bare service name, e.g. Docker DNS) elsewhere. See Environment aliases. |
 | **Hostname** | `TS_HOSTNAME` | `<machineid>-<region>-<app>` | e.g. `148e21-sin-pgproxy`. Dashes, not dots — Tailscale MagicDNS converts dots to dashes anyway. The machine id keeps every ephemeral node uniquely named. |
 
 `TS_AUTHKEY` (secret) enables Tailscale (omit for a 6PN-only proxy). Optional: `DESTINATION_PG_DBS` (secret). Advanced
@@ -80,6 +81,28 @@ listed with rationale in [project.md](project.md).
 Managed entries (with `user`+`password`) let clients connect credential-less, e.g.
 `postgres://pgproxy.internal:5432/mydb` with no password — the proxy authenticates
 upstream itself.
+
+## Environment aliases (`<app>.<env>`)
+
+To reach apps by an environment-tagged name — `core.prod`, `bo.prod`, `core.stage` —
+set `ALIAS_DOMAIN` on each gateway to that environment's tag. A query for
+`<app>.<ALIAS_DOMAIN>` is rewritten to `<app>.<INTERNAL_DOMAIN>`, resolved via
+`DNS_RESOLVER`, and answered under the original alias name (no CNAME, no `.internal`
+leak). `INTERNAL_DOMAIN` defaults to `internal` on Fly and is empty (bare service name)
+elsewhere, so:
+
+- **Prod (Fly):** `ALIAS_DOMAIN=prod` → `core.prod` resolves like `core.internal`
+  (`[fdaa::3]:53`). Additive: `core.internal` keeps working unchanged.
+- **Stage (Dokploy/Openship, Docker):** `ALIAS_DOMAIN=stage`, `DNS_RESOLVER=127.0.0.11:53`,
+  `INTERNAL_DOMAIN=` (empty) → `core.stage` resolves the bare Docker service `core`.
+  Attach the gateway container to the app's Docker network so its DNS can see them.
+
+One shared tailnet reaches both: point Tailscale **split DNS** `prod` → the Fly gateway's
+Tailscale IP and `stage` → the stage gateway's, so one laptop opens `core.prod` **and**
+`core.stage` with no profile switching. DNS returns only an IP, so connect on the app's
+port (`core.prod:5432`, `bo.stage:3000`) — same as `*.internal`. Give each gateway a
+persistent `TS_STATE_DIR` volume so its Tailscale IP (the split-DNS target) is stable
+across restarts.
 
 ## Identity / `application_name`
 

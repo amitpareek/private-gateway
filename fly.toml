@@ -40,6 +40,13 @@ primary_region = "sin"
   # Set a var here only to override a default, e.g.:
   #
   # TS_ADVERTISE_ROUTES  = "fdaa::/16"   # default: auto-derive the org /48
+  #
+  # Environment aliases: set ALIAS_DOMAIN to reach apps as <app>.<env> (e.g.
+  # core.prod) over the tailnet. INTERNAL_DOMAIN auto-defaults to "internal" on
+  # Fly, so core.prod resolves like core.internal (additive; .internal is
+  # unchanged). Then add Tailscale split DNS: "prod" -> this node's Tailscale IP.
+  #
+  # ALIAS_DOMAIN = "prod"
 
 [[vm]]
   size      = "shared-cpu-1x"

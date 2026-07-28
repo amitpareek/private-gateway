@@ -37,6 +37,8 @@ exec /pgproxy \
   --fly-listen-host="${FLY_LISTEN_HOST:-[::]}" \
   --http-proxy-listen="${HTTP_PROXY_LISTEN:-[::]:8080}" \
   --dns-resolver="${DNS_RESOLVER:-}" \
+  --alias-domain="${ALIAS_DOMAIN:-}" \
+  --internal-domain="${INTERNAL_DOMAIN:-}" \
   --tailscaled-socket="${TS_SOCKET:-/var/run/tailscale/tailscaled.sock}" \
   --tailscale-enabled="$TS_ENABLED" \
   --destination-pg-dbs="${DESTINATION_PG_DBS:-}"

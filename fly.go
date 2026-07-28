@@ -29,6 +29,8 @@
 //	--fly-listen-host      Host for Fly 6PN listeners. Default "[::]".
 //	--http-proxy-listen    HTTPS CONNECT proxy addr. Default "[::]:8080".
 //	--dns-resolver         Upstream resolver for *.internal. Fly default; off elsewhere.
+//	--alias-domain         Pseudo-suffix mapping <app>.<env> to <app>.<internal>. Off by default.
+//	--internal-domain      Internal domain appended after stripping --alias-domain. Fly: "internal".
 //	--tailscaled-socket    Local tailscaled API socket for WhoIs.
 package main
 
@@ -760,6 +762,25 @@ const flyResolver = "[fdaa::3]:53"
 var dnsResolver = flag.String("dns-resolver", "",
 	`Upstream DNS resolver to forward *.internal queries to, served on `+dnsListen+` (UDP+TCP). Defaults to `+flyResolver+` on Fly; empty (off) elsewhere.`)
 
+// --alias-domain / --internal-domain drive the <app>.<env> alias feature:
+// a query for <app>.<ALIAS_DOMAIN> is rewritten to <app>.<INTERNAL_DOMAIN>,
+// resolved via --dns-resolver, and answered under the original alias name.
+// This lets a tailnet client reach an app by an environment-tagged name
+// (e.g. core.prod, core.stage) that Tailscale split DNS routes to the
+// right gateway. Empty --alias-domain disables the feature.
+var (
+	aliasDomainFlag    = flag.String("alias-domain", "", "Pseudo-suffix (e.g. \"prod\", \"stage\") that maps <app>.<alias-domain> to <app>.<internal-domain>, resolved via --dns-resolver. Empty disables the alias feature.")
+	internalDomainFlag = flag.String("internal-domain", "", "Real internal domain appended to the short name after stripping --alias-domain (e.g. \"internal\"). Defaults to \"internal\" on Fly; empty (bare service name, e.g. Docker DNS) elsewhere.")
+)
+
+// aliasSuffix / internalDomain are the resolved (trimmed, lowercased,
+// dot-stripped) forms of the flags above, set once in startDNSForwarder.
+// aliasSuffix empty means the alias feature is off.
+var (
+	aliasSuffix    string
+	internalDomain string
+)
+
 // dnsSelfSuffix is "<FLY_APP_NAME>.internal" when we can self-rewrite,
 // else empty. Set once in startDNSForwarder.
 var dnsSelfSuffix string
@@ -774,6 +795,19 @@ func startDNSForwarder() {
 	}
 	if resolver == "" {
 		return
+	}
+
+	// Resolve the <app>.<env> alias config. INTERNAL_DOMAIN defaults to
+	// "internal" on Fly (where <app>.internal is the native name); off Fly
+	// it stays empty (bare service names, e.g. Docker DNS). An empty
+	// aliasSuffix leaves the alias feature off (resolveAlias is a no-op).
+	aliasSuffix = strings.ToLower(strings.Trim(strings.TrimSpace(*aliasDomainFlag), "."))
+	internalDomain = strings.ToLower(strings.Trim(strings.TrimSpace(*internalDomainFlag), "."))
+	if internalDomain == "" && onFly {
+		internalDomain = "internal"
+	}
+	if aliasSuffix != "" {
+		log.Printf("dns: alias domain %q -> internal domain %q (resolver %s)", aliasSuffix, internalDomain, resolver)
 	}
 
 	// Auto-detect: on Fly we know our own app name (FLY_APP_NAME is
@@ -881,26 +915,113 @@ func selfTailscaleAddr(qtype uint16) (netip.Addr, bool) {
 
 // dnsAnswer builds a NOERROR response for query with a single A/AAAA
 // answer record pointing at addr (TTL 30s). qend is the offset past the
-// question (from parseDNSQuestion).
+// question (from parseDNSQuestion). Thin wrapper over dnsAnswerMulti.
 func dnsAnswer(query []byte, qtype uint16, addr netip.Addr, qend int) []byte {
-	if qend < 12 || qend > len(query) {
+	return dnsAnswerMulti(query, qtype, []netip.Addr{addr}, qend)
+}
+
+// dnsAnswerMulti builds a NOERROR response for query with one A/AAAA
+// answer record per addr (TTL 30s), all under the queried name via the
+// 0xC0 0x0C compression pointer. Multiple records let multi-instance apps
+// keep load-balancing. Each addr must match qtype (4 bytes for A, 16 for
+// AAAA). Returns nil if qend is out of range or addrs is empty.
+func dnsAnswerMulti(query []byte, qtype uint16, addrs []netip.Addr, qend int) []byte {
+	if qend < 12 || qend > len(query) || len(addrs) == 0 {
 		return nil
 	}
-	ipb := addr.AsSlice() // 4 bytes for A, 16 for AAAA
-	resp := make([]byte, 0, qend+16)
-	resp = append(resp, query[:qend]...)       // header + question
-	resp[2] = 0x80 | (query[2] & 0x01)         // QR=1, preserve RD
-	resp[3] = 0x80                             // RA=1, RCODE=0 (NOERROR)
-	binary.BigEndian.PutUint16(resp[4:6], 1)   // QDCOUNT
-	binary.BigEndian.PutUint16(resp[6:8], 1)   // ANCOUNT
-	binary.BigEndian.PutUint16(resp[8:10], 0)  // NSCOUNT
-	binary.BigEndian.PutUint16(resp[10:12], 0) // ARCOUNT
-	resp = append(resp, 0xC0, 0x0C)            // answer name: pointer to the question at offset 12
-	resp = binary.BigEndian.AppendUint16(resp, qtype)
-	resp = binary.BigEndian.AppendUint16(resp, 1)  // CLASS IN
-	resp = binary.BigEndian.AppendUint32(resp, 30) // TTL
-	resp = binary.BigEndian.AppendUint16(resp, uint16(len(ipb)))
-	return append(resp, ipb...)
+	resp := make([]byte, 0, qend+16*len(addrs))
+	resp = append(resp, query[:qend]...)                      // header + question
+	resp[2] = 0x80 | (query[2] & 0x01)                        // QR=1, preserve RD
+	resp[3] = 0x80                                            // RA=1, RCODE=0 (NOERROR)
+	binary.BigEndian.PutUint16(resp[4:6], 1)                  // QDCOUNT
+	binary.BigEndian.PutUint16(resp[6:8], uint16(len(addrs))) // ANCOUNT
+	binary.BigEndian.PutUint16(resp[8:10], 0)                 // NSCOUNT
+	binary.BigEndian.PutUint16(resp[10:12], 0)                // ARCOUNT
+	for _, addr := range addrs {
+		ipb := addr.AsSlice()           // 4 bytes for A, 16 for AAAA
+		resp = append(resp, 0xC0, 0x0C) // answer name: pointer to the question at offset 12
+		resp = binary.BigEndian.AppendUint16(resp, qtype)
+		resp = binary.BigEndian.AppendUint16(resp, 1)  // CLASS IN
+		resp = binary.BigEndian.AppendUint32(resp, 30) // TTL
+		resp = binary.BigEndian.AppendUint16(resp, uint16(len(ipb)))
+		resp = append(resp, ipb...)
+	}
+	return resp
+}
+
+// aliasTarget maps an alias-domain query name to the internal name to
+// resolve, or returns ok=false if name is not under aliasSuffix. name is
+// lowercased with no trailing dot (from parseDNSQuestion). It strips the
+// ".<aliasSuffix>" suffix (requiring at least one label before it) and, if
+// internalDomain is set, appends ".<internalDomain>":
+//
+//	core.prod  (alias "prod", internal "internal") -> core.internal
+//	core.stage (alias "stage", internal "")        -> core
+func aliasTarget(name string) (target string, ok bool) {
+	if aliasSuffix == "" {
+		return "", false
+	}
+	suffix := "." + aliasSuffix
+	if !strings.HasSuffix(name, suffix) {
+		return "", false
+	}
+	short := name[:len(name)-len(suffix)]
+	if short == "" { // bare "<aliasSuffix>" has no app label
+		return "", false
+	}
+	if internalDomain != "" {
+		return short + "." + internalDomain, true
+	}
+	return short, true
+}
+
+// resolveAlias answers an <app>.<ALIAS_DOMAIN> A/AAAA query by resolving
+// the rewritten internal name via resolverAddr and returning the result
+// under the ORIGINAL alias name. Returns nil (caller forwards) when the
+// alias feature is off, the query isn't an A/AAAA alias query, or
+// resolution yields no matching-family address.
+func resolveAlias(query []byte, resolverAddr string) []byte {
+	if aliasSuffix == "" {
+		return nil
+	}
+	name, qtype, qend, ok := parseDNSQuestion(query)
+	if !ok || (qtype != dnsTypeA && qtype != dnsTypeAAAA) {
+		return nil
+	}
+	target, ok := aliasTarget(name)
+	if !ok {
+		return nil
+	}
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, resolverAddr)
+		},
+	}
+	network := "ip6"
+	if qtype == dnsTypeA {
+		network = "ip4"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := r.LookupNetIP(ctx, network, target)
+	if err != nil {
+		return nil
+	}
+	var addrs []netip.Addr
+	for _, ip := range ips {
+		ip = ip.Unmap()
+		if qtype == dnsTypeA && ip.Is4() {
+			addrs = append(addrs, ip)
+		} else if qtype == dnsTypeAAAA && !ip.Is4() {
+			addrs = append(addrs, ip)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil
+	}
+	return dnsAnswerMulti(query, qtype, addrs, qend)
 }
 
 // dnsSelfAnswer returns a self-rewrite answer for query if it's an
@@ -931,6 +1052,10 @@ func serveDNSUDP(pc net.PacketConn, resolverAddr string) {
 		}
 		go func(query []byte, src net.Addr) {
 			if resp := dnsSelfAnswer(query); resp != nil {
+				pc.WriteTo(resp, src)
+				return
+			}
+			if resp := resolveAlias(query, resolverAddr); resp != nil {
 				pc.WriteTo(resp, src)
 				return
 			}
@@ -986,6 +1111,12 @@ func handleDNSTCP(c net.Conn, resolverAddr string) {
 			return
 		}
 		if resp := dnsSelfAnswer(msg); resp != nil {
+			if writeDNSTCP(c, resp) != nil {
+				return
+			}
+			continue
+		}
+		if resp := resolveAlias(msg, resolverAddr); resp != nil {
 			if writeDNSTCP(c, resp) != nil {
 				return
 			}

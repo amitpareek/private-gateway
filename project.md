@@ -83,6 +83,8 @@ default chosen for how we run today. Set non-secrets in `fly.toml [env]`, secret
 | `TS_ADVERTISE_ROUTES` | auto-derive org `/48` from `fly-local-6pn` | Advertise exactly the reachable 6PN range, not the whole `fdaa::/16`. |
 | `TS_ADVERTISE_EXIT_NODE` | `true` | We want every machine usable as a region-specific egress exit node. |
 | `DNS_RESOLVER` | `[fdaa::3]:53` on Fly, else empty | Upstream resolver the forwarder relays `*.internal` to. Auto-defaults to Fly's `fdaa::3` when on Fly (no config); generic name so another provider can point it at theirs; empty disables. |
+| `ALIAS_DOMAIN` | empty (off) | Pseudo-suffix (e.g. `prod`, `stage`) that maps `<app>.<ALIAS_DOMAIN>` to `<app>.<INTERNAL_DOMAIN>`, resolves it via `DNS_RESOLVER`, and answers under the alias name. Lets one tailnet client reach `core.prod` and `core.stage` at once (via Tailscale split DNS). Empty disables the feature. |
+| `INTERNAL_DOMAIN` | `internal` on Fly, else empty | Real internal domain appended to the short name after stripping `ALIAS_DOMAIN`. `internal` on Fly (`core.prod`→`core.internal`); empty for bare service names on Docker platforms (`core.stage`→`core`, resolved by Docker DNS). |
 
 ### Advanced (defaults are fine; rarely touched)
 
@@ -111,6 +113,33 @@ do not set these.
 - **DNS self-rewrite** (answer own `*.internal` with the node's Tailscale IP) is on whenever
   `FLY_APP_NAME` is present and the forwarder is running. Falls back to plain forwarding until
   a Tailscale IP exists. See Decisions.
+
+## Environment aliases (`<app>.<env>`)
+
+`ALIAS_DOMAIN`/`INTERNAL_DOMAIN` let a tailnet client reach apps by an
+environment-tagged name — `core.prod`, `bo.prod`, `core.stage` — even when a single dev
+opens prod and stage at once. It builds on the existing DNS forwarder (`fly.go`):
+
+- **Mechanism:** a query for `<app>.<ALIAS_DOMAIN>` is rewritten to `<app>.<INTERNAL_DOMAIN>`
+  (`aliasTarget`), resolved via `DNS_RESOLVER` (`resolveAlias`, using a `net.Resolver` that
+  dials the configured resolver), and answered **under the original alias name** via the
+  same `0xC0 0x0C` compression-pointer builder (`dnsAnswerMulti`, one A/AAAA RR per address
+  so multi-instance apps keep load-balancing). The check sits between `dnsSelfAnswer` and
+  the plain forward path in `serveDNSUDP`/`handleDNSTCP`; a non-match returns nil and falls
+  through to forwarding. Stores no records — each answer is computed live (TTL 30s).
+- **Provider-generic:** on Fly `INTERNAL_DOMAIN` auto-defaults to `internal` (`core.prod` →
+  `core.internal` → `[fdaa::3]:53`); it's **purely additive** — `core.internal` is
+  unaffected. On Docker platforms (Dokploy/Openship) set `DNS_RESOLVER=127.0.0.11:53` and
+  leave `INTERNAL_DOMAIN` empty so `core.stage` resolves the bare Docker service `core`
+  (the gateway container must share the app's Docker network).
+- **One tailnet, a gateway per environment.** A device's `tailscaled` is on one tailnet at
+  a time, so both gateways + all devs join **one** tailnet; Tailscale **split DNS** routes
+  `prod` → the Fly gateway and `stage` → the stage gateway (each to that gateway's Tailscale
+  IP). Prod vs stage isolation is via ACLs/tags, not separate networks. DNS carries no port,
+  so clients connect on the app's own port (`core.prod:5432`), exactly like `*.internal`.
+- **Persistence:** split DNS points at the gateway's *Tailscale IP*, so give each gateway a
+  persistent `TS_STATE_DIR` volume (not the tmpfs default) to keep that IP stable across
+  restarts.
 
 ## Deployment (one-time Tailscale setup)
 
