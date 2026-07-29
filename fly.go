@@ -83,6 +83,12 @@ var (
 	httpProxyListen  = flag.String("http-proxy-listen", "[::]:8080", "Kernel TCP listen address for the HTTPS CONNECT forward proxy. Empty disables.")
 	tailscaledSocket = flag.String("tailscaled-socket", "/var/run/tailscale/tailscaled.sock", "Path to the local tailscaled API socket, used to WhoIs Tailscale clients for application_name. No-op if absent.")
 	tailscaleEnabled = flag.Bool("tailscale-enabled", false, "Whether Tailscale is running (set by entrypoint from TS_AUTHKEY presence). When false, Tailscale source ranges are not trusted.")
+
+	// Opt-in, and deliberately not implied by --tailscale-enabled: the
+	// CONNECT proxy lends out this app's fixed Fly egress IP, so widening
+	// it to the whole tailnet is a policy choice, not a consequence of
+	// running Tailscale. Only meaningful when --tailscale-enabled.
+	httpProxyAllowTailscale = flag.Bool("http-proxy-allow-tailscale", false, "Also allow tailnet clients (Tailscale source ranges) to use the HTTPS CONNECT proxy, not just Fly 6PN. Off by default.")
 )
 
 // parseDestinationPgDbs parses the --destination-pg-dbs flag value as
@@ -323,7 +329,7 @@ apps (or via a Tailscale subnet router pointed at Fly 6PN).</p>
 <p>For outbound HTTPS calls that need to come from this app's fixed
 Fly egress IP (e.g. IP-allowlisted vendors), use the binary's HTTPS
 <code>CONNECT</code> forward proxy on <code>` + html.EscapeString(flyHost) + `:8080</code>.
-Access is gated to Fly 6PN; other sources get <code>403</code>.</p>
+Access is gated to ` + httpProxyAccessNote() + `; other sources get <code>403</code>.</p>
 <pre>curl -x http://` + html.EscapeString(flyHost) + `:8080 https://some-vendor.example.com/</pre>
 
 <h2>application_name attribution</h2>
@@ -340,6 +346,15 @@ you can attribute traffic and spot noisy neighbors.</p>
 </body></html>
 `)
 	return b.Bytes()
+}
+
+// httpProxyAccessNote names the sources the CONNECT proxy admits, for the
+// dev page. Mirrors httpProxy.allowPeer.
+func httpProxyAccessNote() string {
+	if *httpProxyAllowTailscale {
+		return "Fly 6PN and the tailnet"
+	}
+	return "Fly 6PN"
 }
 
 // peerKind classifies the source of an inbound connection.
@@ -737,13 +752,17 @@ func parseVmsTXT(txts []string) map[string]string {
 // clients resolve *.internal to 6PN addresses reachable via the subnet route.
 //
 // Special case ("Option I", auto-enabled on Fly via FLY_APP_NAME): for
-// THIS app's own *.internal names, instead of returning the 6PN address it answers
+// THIS app's own bare <app>.internal name, instead of returning the 6PN address it answers
 // with this node's *Tailscale* IP. Tailnet clients then reach pgproxy
 // directly over Tailscale on every port — no subnet route, no SNAT — so
 // their real source IP is preserved and WhoIs can attribute them. Fly
 // 6PN apps are unaffected: they query Fly's resolver, not us, and still
 // get the 6PN address. No tailscale.com dependency — we read our own
 // Tailscale IP off the local interfaces.
+//
+// Only the bare name is rewritten (see dnsIsSelf): region- and
+// machine-qualified names are relayed, so <region>.<app>.internal still
+// selects a region instead of collapsing onto whichever node answered.
 
 // dnsListen is where the forwarder binds. [::] covers every interface,
 // including the Tailscale one once tailscaled brings it up, so split-DNS
@@ -834,14 +853,28 @@ func startDNSForwarder() {
 	log.Printf("serving .internal DNS on %s -> %s", dnsListen, resolver)
 }
 
-// dnsIsSelf reports whether name (lowercased, no trailing dot) is one of
-// this app's own *.internal names: the bare <app>.internal, or any label
-// under it (covers <region>.<app>.internal and <id>.vm.<app>.internal).
+// dnsIsSelf reports whether name (lowercased, no trailing dot) is this
+// app's own *bare* <app>.internal name — the only name the self-rewrite
+// answers with this node's Tailscale IP.
+//
+// Deliberately an exact match. Qualified names under it keep their normal
+// Fly meaning and are relayed to --dns-resolver, so they resolve to the
+// 6PN address of the machine(s) they name:
+//
+//	<region>.<app>.internal    -> machines in that region
+//	<id>.vm.<app>.internal     -> that specific machine
+//	vms.<app>.internal         -> the TXT inventory identifyClient reads
+//
+// Rewriting those too (the previous behavior) collapsed every name onto
+// whichever node happened to answer the query, so `fra.<app>.internal`
+// could return the sin node and region selection was impossible. The bare
+// name still gives per-user attribution; a caller that asks for a region
+// has named a machine explicitly and gets it.
 func dnsIsSelf(name string) bool {
 	if dnsSelfSuffix == "" {
 		return false
 	}
-	return name == dnsSelfSuffix || strings.HasSuffix(name, "."+dnsSelfSuffix)
+	return name == dnsSelfSuffix
 }
 
 // parseDNSQuestion parses the first question: the QNAME (lowercased, no

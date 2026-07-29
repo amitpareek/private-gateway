@@ -36,6 +36,7 @@ exec /pgproxy \
   --upstream-ca-file="${UPSTREAM_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" \
   --fly-listen-host="${FLY_LISTEN_HOST:-[::]}" \
   --http-proxy-listen="${HTTP_PROXY_LISTEN:-[::]:8080}" \
+  --http-proxy-allow-tailscale="${HTTP_PROXY_ALLOW_TAILSCALE:-false}" \
   --dns-resolver="${DNS_RESOLVER:-}" \
   --alias-domain="${ALIAS_DOMAIN:-}" \
   --internal-domain="${INTERNAL_DOMAIN:-}" \

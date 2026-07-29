@@ -48,6 +48,13 @@ primary_region = "sin"
   #
   # ALIAS_DOMAIN = "prod"
 
+  # Let tailnet clients use the HTTPS CONNECT proxy on 8080, not just Fly
+  # 6PN. Needed for *.internal names to work from the tailnet at all: the
+  # DNS self-rewrite points them at this node's Tailscale IP, which skips
+  # the subnet route (and its SNAT to a 6PN source). Note this lends the
+  # app's fixed Fly egress IP to any device on the tailnet.
+  HTTP_PROXY_ALLOW_TAILSCALE = "true"
+
 [[vm]]
   size      = "shared-cpu-1x"
   memory_mb = 512
