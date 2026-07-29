@@ -13,9 +13,17 @@ import (
 )
 
 // httpProxy is an HTTPS CONNECT forward proxy gated to Fly 6PN
-// sources. It exists so other Fly apps can make outbound HTTPS
+// sources, plus tailnet sources when --http-proxy-allow-tailscale is
+// set. It exists so other Fly apps can make outbound HTTPS
 // requests through this binary's fixed Fly egress IP, e.g. to
 // IP-allowlisted vendors.
+//
+// Why the tailnet needs an explicit opt-in: a tailnet client reaching
+// us over the subnet route is SNATed to the router's 6PN address and so
+// already classifies as peerFly. The ones this flag admits are those
+// arriving at our Tailscale IP directly — which is where the DNS
+// self-rewrite sends every *.internal name for this app (see
+// dnsSelfAnswer), so without it no hostname works from the tailnet.
 type httpProxy struct {
 	activeSessions  expvar.Int
 	startedSessions expvar.Int
@@ -24,6 +32,18 @@ type httpProxy struct {
 
 func newHTTPProxy() *httpProxy {
 	return &httpProxy{errors: new(expvar.Map)}
+}
+
+// allowPeer reports whether a classified peer may use the proxy. Fly 6PN
+// is always allowed; the tailnet only with --http-proxy-allow-tailscale.
+func (h *httpProxy) allowPeer(k peerKind) bool {
+	switch k {
+	case peerFly:
+		return true
+	case peerTailscale:
+		return *httpProxyAllowTailscale
+	}
+	return false
 }
 
 func (h *httpProxy) Expvar() expvar.Var {
@@ -35,7 +55,7 @@ func (h *httpProxy) Expvar() expvar.Var {
 }
 
 func (h *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if classifyPeer(r.RemoteAddr) != peerFly {
+	if !h.allowPeer(classifyPeer(r.RemoteAddr)) {
 		h.errors.Add("disallowed-source", 1)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return

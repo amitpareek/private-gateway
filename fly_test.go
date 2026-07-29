@@ -291,9 +291,13 @@ func TestParseDNSQuestionAndIsSelf(t *testing.T) {
 		want bool
 	}{
 		{"pgproxy.internal", true},
-		{"sin.pgproxy.internal", true},
-		{"148e21.vm.pgproxy.internal", true},
 		{"PGPROXY.INTERNAL", true}, // case-insensitive
+		// Qualified names are NOT self: they relay to Fly's resolver so
+		// they resolve to the machine(s) they name, preserving region
+		// and per-machine selection.
+		{"sin.pgproxy.internal", false},
+		{"148e21.vm.pgproxy.internal", false},
+		{"vms.pgproxy.internal", false},
 		{"other-app.internal", false},
 		{"notpgproxy.internal", false}, // suffix must be on a label boundary
 	}

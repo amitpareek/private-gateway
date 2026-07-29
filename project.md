@@ -98,7 +98,8 @@ default chosen for how we run today. Set non-secrets in `fly.toml [env]`, secret
 | `TS_EXTRA_ARGS` | — | Escape hatch for `tailscale up` flags we didn't surface, so no rebuild is needed. |
 | `UPSTREAM_CA_FILE` | `/etc/ssl/certs/ca-certificates.crt` | Standard CA path in the Alpine image; upstreams use public CAs. |
 | `FLY_LISTEN_HOST` | `[::]` | Bind all interfaces so 6PN + routed traffic reach the listeners; source is gated by `classifyPeer`. |
-| `HTTP_PROXY_LISTEN` | `[::]:8080` | Fixed-egress `CONNECT` proxy port; gated to 6PN sources. |
+| `HTTP_PROXY_LISTEN` | `[::]:8080` | Fixed-egress `CONNECT` proxy port; gated to 6PN sources (plus the tailnet if `HTTP_PROXY_ALLOW_TAILSCALE`). |
+| `HTTP_PROXY_ALLOW_TAILSCALE` | `false` | The `CONNECT` proxy lends out this app's *fixed Fly egress IP*, so admitting the whole tailnet is a policy choice — not implied by running Tailscale. Off by default. Turn on to make `*.internal:8080` usable from the tailnet at all: the DNS self-rewrite answers those names with the node's Tailscale IP, which bypasses the subnet route and its SNAT, so such clients arrive as `peerTailscale` rather than `peerFly`. |
 | `DEBUG_PORT` | `80` | Serves the dev page + `/debug/vars`; convenient over 6PN. |
 | `TS_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Local `tailscaled` API socket; pgproxy queries it (raw HTTP) to WhoIs Tailscale clients for `application_name`. Shared with `fly-router.sh`. |
 
@@ -108,7 +109,9 @@ do not set these.
 **No env var (auto-detected via `FLY_APP_NAME` = "on Fly"):**
 - **Trusted sources** (`classifyPeer`): Tailscale ranges are *always* accepted (they're
   Tailscale-exclusive, so harmless when unused); Fly 6PN (`fdaa::/16`) is accepted *only on
-  Fly*. So off-Fly the tailnet is the access path — nothing to configure.
+  Fly*. So off-Fly the tailnet is the access path — nothing to configure. The `CONNECT`
+  proxy is the one exception: it narrows to `peerFly` unless `HTTP_PROXY_ALLOW_TAILSCALE`
+  is set, because it hands out the fixed Fly egress IP.
 - **`DNS_RESOLVER`** defaults to Fly's `[fdaa::3]:53` on Fly, empty (forwarder off) elsewhere.
 - **DNS self-rewrite** (answer own `*.internal` with the node's Tailscale IP) is on whenever
   `FLY_APP_NAME` is present and the forwarder is running. Falls back to plain forwarding until
@@ -174,6 +177,15 @@ early during implementation.
   - Single-machine note: even via the 6PN/subnet path, a tailnet user hitting the router's
     *own* 6PN address is delivered locally (no SNAT) and is already identifiable — the
     self-rewrite makes this deterministic and adds the multi-machine + all-ports guarantees.
+  - **Only the bare `<app>.internal` is rewritten** (`dnsIsSelf` is an exact match).
+    Region- and machine-qualified names (`<region>.<app>.internal`,
+    `<id>.vm.<app>.internal`, `vms.<app>.internal`) relay to `DNS_RESOLVER` and keep their
+    normal Fly meaning. Rewriting them too collapsed every name onto whichever node
+    answered the query, so `fra.<app>.internal` could hand back the *sin* node and picking
+    a region by hostname was impossible — which matters because each machine has its own
+    fixed egress IP. Trade-off: a tailnet client using a qualified name reaches us over the
+    subnet route, so it may be SNATed and attributed at router level rather than per-user;
+    the bare name remains the per-user path.
   - Considered alternatives: a port-specific `ip6tables` block (single-machine only, leaky
     across HA routers) and a Tailscale ACL (clean but requires tailnet policy edits). The DNS
     self-rewrite keeps everything in the app and needs no tailnet config.
