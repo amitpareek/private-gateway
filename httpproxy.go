@@ -22,8 +22,10 @@ import (
 // us over the subnet route is SNATed to the router's 6PN address and so
 // already classifies as peerFly. The ones this flag admits are those
 // arriving at our Tailscale IP directly — which is where the DNS
-// self-rewrite sends every *.internal name for this app (see
-// dnsSelfAnswer), so without it no hostname works from the tailnet.
+// self-rewrite sends the bare <app>.internal name (see dnsIsSelf). So
+// without the flag that name, the one the dev page hands out, gets a
+// 403; qualified names such as <region>.<app>.internal still work
+// unflagged, since they relay to 6PN and reach us over the subnet route.
 type httpProxy struct {
 	activeSessions  expvar.Int
 	startedSessions expvar.Int
