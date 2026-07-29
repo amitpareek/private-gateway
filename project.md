@@ -49,7 +49,8 @@ target's 6PN listener.
 | `pgproxy.go` | Pure Postgres wire proxy: strict upstream TLS + serve loop. Upstream-faithful; customizations are `// EXT` hooks. |
 | `credentials-manager.go` | Credential management ("managed" mode): the proxy authenticates to the upstream itself so clients connect credential-less. Also the shared StartupMessage read/detect helpers. |
 | `httpproxy.go` | HTTPS `CONNECT` forward proxy (outbound via the fixed Fly egress IP). |
-| `fly.go` | All Fly glue: multi-DB config, `runProxies` bootstrap, dev page, source gating (`classifyPeer`, auto-trusts Tailscale always + Fly 6PN when `onFly`), `application_name` attribution (Fly PTR/TXT + Tailscale WhoIs over the local socket + StartupMessage rewrite), and the `.internal` DNS forwarder with the self → Tailscale-IP rewrite (Go companion to `fly-router.sh`). |
+| `dns.go` | The `.internal` DNS forwarder (Go companion to `fly-router.sh`): relays to `DNS_RESOLVER`, the self → Tailscale-IP rewrite for the bare `<app>.internal` (`dnsIsSelf` is an exact match, so `<region>.<app>.internal` still selects a region), and the `<app>.<env>` alias scheme (`ALIAS_DOMAIN`). |
+| `fly.go` | All Fly glue: multi-DB config, `runProxies` bootstrap, dev page, source gating (`classifyPeer`, auto-trusts Tailscale always + Fly 6PN when `onFly`), and `application_name` attribution (Fly PTR/TXT + Tailscale WhoIs over the local socket + StartupMessage rewrite). |
 
 **fly-router / Tailscale layer — shell/Docker (no Go):**
 
@@ -121,7 +122,7 @@ do not set these.
 
 `ALIAS_DOMAIN`/`INTERNAL_DOMAIN` let a tailnet client reach apps by an
 environment-tagged name — `core.prod`, `bo.prod`, `core.stage` — even when a single dev
-opens prod and stage at once. It builds on the existing DNS forwarder (`fly.go`):
+opens prod and stage at once. It builds on the existing DNS forwarder (`dns.go`):
 
 - **Mechanism:** a query for `<app>.<ALIAS_DOMAIN>` is rewritten to `<app>.<INTERNAL_DOMAIN>`
   (`aliasTarget`), resolved via `DNS_RESOLVER` (`resolveAlias`, using a `net.Resolver` that
