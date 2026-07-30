@@ -10,8 +10,13 @@
 //
 // Contents, in order:
 //   - multi-database config: upstreamConfig + --destination-pg-dbs parsing
-//   - runProxies: the bootstrap that wires the per-DB listeners, the dev
-//     page, the HTTP CONNECT proxy, and the DNS forwarder
+//   - plain-TCP config: tcpTarget + --destination-tcp-targets parsing
+//     (the forwarder itself lives in tcpproxy.go)
+//   - validateListenPorts: one table of every port the process will bind,
+//     checked before anything binds
+//   - runProxies: the bootstrap that wires the per-DB listeners, the
+//     plain-TCP listeners, the dev page, the HTTP CONNECT proxy, and the
+//     DNS forwarder
 //   - the dev / reference page (renderDevPage*)
 //   - source gating (classifyPeer) + application_name attribution:
 //     Fly 6PN clients by PTR/TXT, Tailscale clients by WhoIs against the
@@ -20,7 +25,8 @@
 //
 // Added flags:
 //
-//	--destination-pg-dbs   JSON array of {name, listen, target} databases.
+//	--destination-pg-dbs      JSON array of {name, listen, target} databases.
+//	--destination-tcp-targets JSON array of {name, listen, target} TCP forwards.
 //	--fly-listen-host      Host for Fly 6PN listeners. Default "[::]".
 //	--http-proxy-listen    HTTPS CONNECT proxy addr. Default "[::]:8080".
 //	--tailscaled-socket    Local tailscaled API socket for WhoIs.
@@ -70,12 +76,35 @@ type upstreamConfig struct {
 // upstream and should authenticate on the client's behalf.
 func (u upstreamConfig) managed() bool { return u.User != "" }
 
+// tcpTarget describes one named plain-TCP upstream: the proxy listens on
+// Listen (Fly 6PN) and pipes bytes to Target, parsing nothing. It carries no
+// credentials — see tcpproxy.go for why this stays separate from the
+// Postgres proxy.
+type tcpTarget struct {
+	Name   string `json:"name"`
+	Listen int    `json:"listen"`
+	Target string `json:"target"` // host:port
+}
+
+// Reserved listen-port ranges, enforced at startup. Keeping each kind in its
+// own band means a new entry can never silently land on an infrastructure
+// port (80 debug, 53 DNS, 8080 CONNECT, 22 Fly hallpass) and makes a
+// collision obvious by inspection.
+const (
+	pgPortMin  = 5400
+	pgPortMax  = 6000
+	tcpPortMin = 9000
+	tcpPortMax = 9999
+)
+
 var (
 	destinationPgDbs = flag.String("destination-pg-dbs", "", `JSON array of {"name","listen","target"} entries. Empty is allowed.`)
-	flyListenHost    = flag.String("fly-listen-host", "[::]", "Host (no port) to bind Fly 6PN listeners on. Empty disables Fly listeners.")
-	httpProxyListen  = flag.String("http-proxy-listen", "[::]:8080", "Kernel TCP listen address for the HTTPS CONNECT forward proxy. Empty disables.")
-	tailscaledSocket = flag.String("tailscaled-socket", "/var/run/tailscale/tailscaled.sock", "Path to the local tailscaled API socket, used to WhoIs Tailscale clients for application_name. No-op if absent.")
-	tailscaleEnabled = flag.Bool("tailscale-enabled", false, "Whether Tailscale is running (set by entrypoint from TS_AUTHKEY presence). When false, Tailscale source ranges are not trusted.")
+
+	destinationTCPTargets = flag.String("destination-tcp-targets", "", `JSON array of {"name","listen","target"} plain-TCP forwards. Empty is allowed.`)
+	flyListenHost         = flag.String("fly-listen-host", "[::]", "Host (no port) to bind Fly 6PN listeners on. Empty disables Fly listeners.")
+	httpProxyListen       = flag.String("http-proxy-listen", "[::]:8080", "Kernel TCP listen address for the HTTPS CONNECT forward proxy. Empty disables.")
+	tailscaledSocket      = flag.String("tailscaled-socket", "/var/run/tailscale/tailscaled.sock", "Path to the local tailscaled API socket, used to WhoIs Tailscale clients for application_name. No-op if absent.")
+	tailscaleEnabled      = flag.Bool("tailscale-enabled", false, "Whether Tailscale is running (set by entrypoint from TS_AUTHKEY presence). When false, Tailscale source ranges are not trusted.")
 
 	// Opt-in, and deliberately not implied by --tailscale-enabled: the
 	// CONNECT proxy lends out this app's fixed Fly egress IP, so widening
@@ -138,15 +167,127 @@ func parseDestinationPgDbsJSON(raw string) ([]upstreamConfig, error) {
 	return list, nil
 }
 
-// runProxies parses --destination-pg-dbs, creates one proxy per
-// entry (sharing the upstream CA), starts the Fly 6PN listener for
-// each, registers the dev page on the debug mux, and brings up the
-// HTTP CONNECT proxy. It is tolerant of an empty database list — first
-// launch will commonly have none until secrets are set.
+// parseDestinationTCPTargets parses the --destination-tcp-targets flag value
+// as a JSON array of tcpTarget. An empty or whitespace value yields a nil
+// list and no error, as with the Postgres list.
+func parseDestinationTCPTargets() ([]tcpTarget, error) {
+	return parseDestinationTCPTargetsJSON(*destinationTCPTargets)
+}
+
+func parseDestinationTCPTargetsJSON(raw string) ([]tcpTarget, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil, nil
+	}
+	var list []tcpTarget
+	if err := json.Unmarshal([]byte(s), &list); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %v", err)
+	}
+	seenName := map[string]bool{}
+	for i := range list {
+		t := &list[i]
+		t.Name = strings.TrimSpace(t.Name)
+		t.Target = strings.TrimSpace(t.Target)
+		if t.Name == "" {
+			return nil, fmt.Errorf("entry %d: empty name", i)
+		}
+		if t.Listen <= 0 || t.Listen > 65535 {
+			return nil, fmt.Errorf("entry %q: invalid listen port %d", t.Name, t.Listen)
+		}
+		if _, _, err := net.SplitHostPort(t.Target); err != nil {
+			return nil, fmt.Errorf("entry %q: target must be host:port (%v)", t.Name, err)
+		}
+		if seenName[t.Name] {
+			return nil, fmt.Errorf("duplicate name %q", t.Name)
+		}
+		seenName[t.Name] = true
+	}
+	return list, nil
+}
+
+// portClaim records who wants a port, so a collision can name both sides.
+type portClaim struct {
+	port  int
+	owner string // e.g. `pg db "rw"`, `tcp target "mts"`, "the CONNECT proxy"
+}
+
+// validateListenPorts checks every port this process will bind — Postgres
+// entries, plain-TCP entries, the CONNECT proxy, the debug/dev page and the
+// DNS forwarder — against each other and against the reserved ranges.
+//
+// It exists because per-list duplicate checks are not enough: they let a
+// Postgres entry claim 8080, which then binds first and leaves the CONNECT
+// listener to die with a bare "address already in use" that names nothing.
+// Every claim is checked here, before anything binds.
+func validateListenPorts(pgs []upstreamConfig, tcps []tcpTarget, httpProxyAddr string, debugPortNum int) error {
+	var claims []portClaim
+
+	for _, u := range pgs {
+		if u.Listen < pgPortMin || u.Listen > pgPortMax {
+			return fmt.Errorf("pg db %q: listen port %d is outside the reserved Postgres range %d-%d",
+				u.Name, u.Listen, pgPortMin, pgPortMax)
+		}
+		claims = append(claims, portClaim{u.Listen, fmt.Sprintf("pg db %q", u.Name)})
+	}
+	for _, t := range tcps {
+		if t.Listen < tcpPortMin || t.Listen > tcpPortMax {
+			return fmt.Errorf("tcp target %q: listen port %d is outside the reserved TCP range %d-%d",
+				t.Name, t.Listen, tcpPortMin, tcpPortMax)
+		}
+		claims = append(claims, portClaim{t.Listen, fmt.Sprintf("tcp target %q", t.Name)})
+	}
+
+	// Infrastructure ports. These are outside both reserved ranges, so a
+	// clash means someone widened a range or hand-set a flag.
+	if httpProxyAddr != "" {
+		_, portStr, err := net.SplitHostPort(httpProxyAddr)
+		if err != nil {
+			return fmt.Errorf("--http-proxy-listen %q: not a host:port address (%v)", httpProxyAddr, err)
+		}
+		p, err := strconv.Atoi(portStr)
+		if err != nil || p <= 0 || p > 65535 {
+			return fmt.Errorf("--http-proxy-listen %q: invalid port %q", httpProxyAddr, portStr)
+		}
+		claims = append(claims, portClaim{p, "the CONNECT proxy (--http-proxy-listen)"})
+	}
+	if debugPortNum > 0 {
+		claims = append(claims, portClaim{debugPortNum, "the debug/dev page (--debug-port)"})
+	}
+	if _, portStr, err := net.SplitHostPort(dnsListen); err == nil {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			claims = append(claims, portClaim{p, "the .internal DNS forwarder"})
+		}
+	}
+
+	byPort := map[int]string{}
+	for _, c := range claims {
+		if prev, ok := byPort[c.port]; ok {
+			return fmt.Errorf("port %d claimed by both %s and %s", c.port, prev, c.owner)
+		}
+		byPort[c.port] = c.owner
+	}
+	return nil
+}
+
+// runProxies parses --destination-pg-dbs and --destination-tcp-targets,
+// validates every listen port before anything binds, creates one proxy per
+// entry (Postgres proxies share the upstream CA), starts the Fly 6PN listener
+// for each, registers the dev page on the debug mux, and brings up the HTTP
+// CONNECT proxy. It is tolerant of empty lists — first launch will commonly
+// have none until secrets are set.
 func runProxies(upstreamCAPath string, debugMux *http.ServeMux) {
 	cfgs, err := parseDestinationPgDbs()
 	if err != nil {
 		log.Fatalf("--destination-pg-dbs: %v", err)
+	}
+	tcpCfgs, err := parseDestinationTCPTargets()
+	if err != nil {
+		log.Fatalf("--destination-tcp-targets: %v", err)
+	}
+	// Before any bind: a port clash must fail the start outright rather than
+	// half-bind and serve a partial gateway.
+	if err := validateListenPorts(cfgs, tcpCfgs, *httpProxyListen, *debugPort); err != nil {
+		log.Fatalf("listen ports: %v", err)
 	}
 	if len(cfgs) == 0 {
 		log.Printf("no Postgres databases configured. Set DESTINATION_PG_DBS to a JSON array (see the dev page on the debug port).")
@@ -177,13 +318,28 @@ func runProxies(upstreamCAPath string, debugMux *http.ServeMux) {
 		}
 	}
 
+	for _, t := range tcpCfgs {
+		tp := newTCPProxy(t)
+		expvar.Publish("tcp_"+t.Name, tp.Expvar())
+
+		if *flyListenHost != "" {
+			addr := net.JoinHostPort(strings.Trim(*flyListenHost, "[]"), strconv.Itoa(t.Listen))
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				log.Fatalf("tcp listen for %q on %s: %v", t.Name, addr, err)
+			}
+			log.Printf("tcp %q: Fly 6PN %s -> %s", t.Name, addr, t.Target)
+			go func(p *tcpProxy, ln net.Listener) { log.Fatal(p.Serve(ln)) }(tp, ln)
+		}
+	}
+
 	if debugMux != nil {
 		debugMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)
 				return
 			}
-			renderDevPage(w, cfgs)
+			renderDevPage(w, cfgs, tcpCfgs)
 		})
 	}
 
@@ -208,17 +364,17 @@ func runProxies(upstreamCAPath string, debugMux *http.ServeMux) {
 // configured databases with their Fly 6PN connection URLs and target
 // host:port. It also documents how to add/modify databases and how to
 // use the HTTP CONNECT proxy. Passwords are never displayed.
-func renderDevPage(w http.ResponseWriter, cfgs []upstreamConfig) {
+func renderDevPage(w http.ResponseWriter, cfgs []upstreamConfig, tcps []tcpTarget) {
 	flyApp := os.Getenv("FLY_APP_NAME")
 	flyHost := "private-gateway.internal"
 	if flyApp != "" {
 		flyHost = flyApp + ".internal"
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(renderDevPageHTML(flyHost, cfgs))
+	w.Write(renderDevPageHTML(flyHost, cfgs, tcps))
 }
 
-func renderDevPageHTML(flyHost string, cfgs []upstreamConfig) []byte {
+func renderDevPageHTML(flyHost string, cfgs []upstreamConfig, tcps []tcpTarget) []byte {
 	sorted := append([]upstreamConfig(nil), cfgs...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Listen < sorted[j].Listen })
 
@@ -316,8 +472,38 @@ choices: <code>5432</code> for the primary writer, <code>5433</code> for the fir
 read-only, <code>5434</code> and up for additional read replicas. After
 deploying, the entry shows up in <em>Databases</em> above and is
 reachable at <code>` + html.EscapeString(flyHost) + `:&lt;listen&gt;</code> from Fly
-apps (or via a Tailscale subnet router pointed at Fly 6PN).</p>
+apps (or via a Tailscale subnet router pointed at Fly 6PN).
+Ports must fall in the reserved Postgres range <code>` + strconv.Itoa(pgPortMin) + `-` + strconv.Itoa(pgPortMax) + `</code>;
+anything outside it, or clashing with another listener, fails the start.</p>`)
 
+	b.WriteString(`<h2>Plain TCP forwards</h2>`)
+	if len(tcps) == 0 {
+		b.WriteString("<p class=\"note\">None configured.</p>\n")
+	} else {
+		sortedTCP := append([]tcpTarget(nil), tcps...)
+		sort.Slice(sortedTCP, func(i, j int) bool { return sortedTCP[i].Listen < sortedTCP[j].Listen })
+		for _, t := range sortedTCP {
+			fmt.Fprintf(&b, "<h3>%s <span class=\"note\">port %d</span></h3>\n", html.EscapeString(t.Name), t.Listen)
+			b.WriteString("<table>\n")
+			fmt.Fprintf(&b, "<tr><th>Fly 6PN</th><td><code>%s:%d</code></td></tr>\n", html.EscapeString(flyHost), t.Listen)
+			fmt.Fprintf(&b, "<tr><th>Target</th><td class=\"target\"><code>%s</code></td></tr>\n", html.EscapeString(t.Target))
+			b.WriteString("</table>\n")
+		}
+	}
+	b.WriteString(`<p>For upstreams that are neither Postgres nor HTTP and that
+IP-allowlist this app's fixed Fly egress IP. The forward is a byte pipe: it
+parses nothing and terminates no TLS, so the upstream's own certificate reaches
+your client. A client dialing <code>` + html.EscapeString(flyHost) + `:&lt;listen&gt;</code>
+must therefore verify the <em>upstream's</em> hostname, not the address it
+dialed — most TLS clients expose this as a "server name" setting separate from
+the connect host.</p>
+<p>Routing is by listen port: raw TCP carries no destination metadata, so one
+port forwards to exactly one target. Ports must fall in the reserved TCP range
+<code>` + strconv.Itoa(tcpPortMin) + `-` + strconv.Itoa(tcpPortMax) + `</code>.</p>
+<pre>fly secrets set DESTINATION_TCP_TARGETS='[{"name":"mts","listen":9001,"target":"gateway.example.com:5671"}]'
+fly deploy
+</pre>`)
+	b.WriteString(`
 <h2>HTTP CONNECT proxy</h2>
 <p>For outbound HTTPS calls that need to come from this app's fixed
 Fly egress IP (e.g. IP-allowlisted vendors), use the binary's HTTPS

@@ -253,7 +253,8 @@ func TestDevPage_NeverRendersPasswords(t *testing.T) {
 			DBName: "maindb", User: "app_user", Password: "hunter2-secret"},
 		{Name: "admin", Listen: 5439, Target: "ep-x.neon.tech:5432"},
 	}
-	html := string(renderDevPageHTML("private-gateway.internal", cfgs))
+	tcps := []tcpTarget{{Name: "mts", Listen: 9001, Target: "gateway.example.com:5671"}}
+	html := string(renderDevPageHTML("private-gateway.internal", cfgs, tcps))
 	if strings.Contains(html, "hunter2-secret") {
 		t.Fatalf("dev page leaks a configured password")
 	}

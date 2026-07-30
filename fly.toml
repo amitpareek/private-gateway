@@ -24,6 +24,17 @@
 #   ]'
 #   fly deploy
 #
+# Plain-TCP forwards, for upstreams that are neither Postgres nor HTTP and that
+# IP-allowlist this app's fixed egress IP (one listen port per target — raw TCP
+# has no hostname to route on):
+#
+#   fly secrets set DESTINATION_TCP_TARGETS='[
+#     {"name":"mts","listen":9001,"target":"gateway.example.com:5671"}
+#   ]'
+#
+# Reserved listen ranges, enforced at startup: Postgres 5400-6000, plain TCP
+# 9000-9999. A port outside its range, or claimed twice, fails the start.
+#
 # Secrets (never put these in [env]): TS_AUTHKEY, DESTINATION_PG_DBS.
 
 # Default app name; the actual app is set at deploy time (e.g. `fly deploy -a <name>`).

@@ -42,4 +42,5 @@ exec /private-gateway \
   --internal-domain="${INTERNAL_DOMAIN:-}" \
   --tailscaled-socket="${TS_SOCKET:-/var/run/tailscale/tailscaled.sock}" \
   --tailscale-enabled="$TS_ENABLED" \
-  --destination-pg-dbs="${DESTINATION_PG_DBS:-}"
+  --destination-pg-dbs="${DESTINATION_PG_DBS:-}" \
+  --destination-tcp-targets="${DESTINATION_TCP_TARGETS:-}"

@@ -52,6 +52,34 @@ fly secrets set DESTINATION_PG_DBS='[
 fly deploy
 ```
 
+### Plain-TCP forwards
+
+For upstreams that are neither Postgres nor HTTP and that IP-allowlist this
+app's fixed egress IP:
+
+```sh
+fly secrets set DESTINATION_TCP_TARGETS='[
+  {"name":"mts","listen":9001,"target":"gateway.example.com:5671"}
+]'
+fly deploy
+```
+
+Each entry is a byte pipe: nothing is parsed and no TLS is terminated, so the
+upstream's own certificate reaches your client end to end. Because of that, a
+client dialing `<app>.internal:9001` must verify the **upstream's** hostname
+rather than the address it dialed — most TLS clients expose that as a "server
+name" setting separate from the connect host. Set it explicitly; a client that
+silently tolerates the mismatch is not validating the certificate at all.
+
+Routing is by listen port, one port per target: a raw TCP stream carries no
+hostname to route on.
+
+Listen ports are range-checked at startup — Postgres in **5400–6000**, plain
+TCP in **9000–9999** — and every port the process binds (including the
+`CONNECT` proxy, the dev page and DNS) is checked for collisions before
+anything binds. A violation fails the start with a message naming both
+claimants, rather than half-binding.
+
 ## What's on by default
 
 With just `TS_AUTHKEY` set, every feature below is already enabled — set the env
@@ -67,7 +95,8 @@ var only to change it. Non-secrets go in `fly.toml [env]`; secrets via
 | **`<app>.<env>` alias** | `ALIAS_DOMAIN` / `INTERNAL_DOMAIN` | off (`ALIAS_DOMAIN` empty) | Maps `<app>.<env>` (e.g. `core.prod`) to `<app>.<internal-domain>`, resolves it via `DNS_RESOLVER`, and answers under the alias name. `INTERNAL_DOMAIN` defaults to `internal` on Fly, empty (bare service name, e.g. Docker DNS) elsewhere. See Environment aliases. |
 | **Hostname** | `TS_HOSTNAME` | `<machineid>-<region>-<app>` | e.g. `148e21-sin-private-gateway`. Dashes, not dots — Tailscale MagicDNS converts dots to dashes anyway. The machine id keeps every ephemeral node uniquely named. |
 
-`TS_AUTHKEY` (secret) enables Tailscale (omit for a 6PN-only proxy). Optional: `DESTINATION_PG_DBS` (secret). Advanced
+`TS_AUTHKEY` (secret) enables Tailscale (omit for a 6PN-only proxy). Optional:
+`DESTINATION_PG_DBS`, `DESTINATION_TCP_TARGETS` (secrets). Advanced
 knobs (`TS_ACCEPT_DNS`, `TS_SNAT_SUBNET_ROUTES`, `TS_STATE_DIR`, `TS_SOCKET`,
 `UPSTREAM_CA_FILE`, `FLY_LISTEN_HOST`, `HTTP_PROXY_LISTEN`, `DEBUG_PORT`, …) are
 listed with rationale in [project.md](project.md).

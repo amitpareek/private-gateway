@@ -28,6 +28,8 @@ COPY fly-router.sh /fly-router.sh
 RUN chmod +x /entrypoint.sh /fly-router.sh
 
 # 5432 = Postgres (Fly 6PN; reachable from the tailnet via the subnet router)
+#        Postgres listeners live in 5400-6000, plain-TCP forwards in 9000-9999;
+#        both are set by secret, so EXPOSE only names the conventional one.
 # 8080 = HTTPS CONNECT forward proxy (Fly 6PN only)
 #   80 = debug/metrics + dev page (Fly 6PN)
 #   53 = .internal DNS forwarder (served to the tailnet)

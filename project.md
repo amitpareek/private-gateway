@@ -53,6 +53,7 @@ target's 6PN listener.
 | `pgproxy.go` | Pure Postgres wire proxy: strict upstream TLS + serve loop. Upstream-faithful; customizations are `// EXT` hooks. |
 | `credentials-manager.go` | Credential management ("managed" mode): the proxy authenticates to the upstream itself so clients connect credential-less. Also the shared StartupMessage read/detect helpers. |
 | `httpproxy.go` | HTTPS `CONNECT` forward proxy (outbound via the fixed Fly egress IP). |
+| `tcpproxy.go` | Plain-TCP forwarder: one listen port per upstream, byte-for-byte, no parsing and no TLS termination. Kept separate from the Postgres proxy so credential injection and attribution can't leak into a dumb pipe. |
 | `dns.go` | The `.internal` DNS forwarder (Go companion to `fly-router.sh`): relays to `DNS_RESOLVER`, the self → Tailscale-IP rewrite for the bare `<app>.internal` (`dnsIsSelf` is an exact match, so `<region>.<app>.internal` still selects a region), and the `<app>.<env>` alias scheme (`ALIAS_DOMAIN`). |
 | `fly.go` | All Fly glue: multi-DB config, `runProxies` bootstrap, dev page, source gating (`classifyPeer`, auto-trusts Tailscale always + Fly 6PN when `onFly`), and `application_name` attribution (Fly PTR/TXT + Tailscale WhoIs over the local socket + StartupMessage rewrite). |
 
@@ -84,6 +85,7 @@ default chosen for how we run today. Set non-secrets in `fly.toml [env]`, secret
 | Env | Default | Why this default |
 |---|---|---|
 | `DESTINATION_PG_DBS` (secret) | empty | App must boot before any DB is configured; add later via secret. |
+| `DESTINATION_TCP_TARGETS` (secret) | empty | Same reasoning as the DB list. Plain-TCP forwards for upstreams that are neither Postgres nor HTTP and that IP-allowlist our egress IP. One listen port per target — raw TCP has no hostname to route on. Listen ports must fall in 9000-9999 (Postgres uses 5400-6000); every port the process binds is checked for collisions before anything binds, and a clash is fatal. |
 | `TS_HOSTNAME` | `$FLY_MACHINE_ID-$FLY_REGION-$FLY_APP_NAME` | Machine ID makes every ephemeral node uniquely named, avoiding MagicDNS `-1/-2` collisions across restarts/regions. |
 | `TS_ADVERTISE_ROUTES` | auto-derive org `/48` from `fly-local-6pn` | Advertise exactly the reachable 6PN range, not the whole `fdaa::/16`. |
 | `TS_ADVERTISE_EXIT_NODE` | `true` | We want every machine usable as a region-specific egress exit node. |
