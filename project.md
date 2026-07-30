@@ -1,9 +1,10 @@
-# pgproxy — project reference
+# private-gateway — project reference
 
 ## Overview
 
-`pgproxy` is a Postgres wire-protocol proxy fronting upstream Postgres (e.g. Neon) for
-Fly.io apps. Per database it can run as:
+`private-gateway` is a private, 6PN-only gateway for Fly.io apps. Its largest component is a
+Postgres wire-protocol proxy fronting upstream Postgres (e.g. Neon), which per database can
+run as:
 
 - **managed** — entry carries `user`+`password`; the proxy authenticates to the upstream
   itself and clients connect credential-less (client user ignored, only the db name honored).
@@ -11,7 +12,10 @@ Fly.io apps. Per database it can run as:
 
 It also enforces strict upstream TLS, injects an `application_name` for attribution, serves
 an HTTPS `CONNECT` forward proxy (so Fly apps egress via this app's fixed IP), and a small
-dev/reference page. It's a fork kept close to upstream `tailscale.com/cmd/pgproxy`.
+dev/reference page. The Postgres proxy itself (`pgproxy.go`) is a fork kept close to upstream
+`tailscale.com/cmd/pgproxy` — the project began as that fork and kept the filename as its
+scope widened past Postgres, which is why the component and the project are named
+differently.
 
 ## Architecture decision: real `tailscaled`, not `tsnet` ("Approach B")
 
@@ -33,16 +37,16 @@ design until merged. Runtime not yet deploy-verified on Fly (see below).
 
 - **`tailscaled`** (TUN) — the only Tailscale component. Joins the tailnet, advertises the
   org 6PN `/48` + exit node; the kernel forwards.
-- **`pgproxy`** (Go) — a 6PN-only service: Postgres proxy + `CONNECT` proxy + dev page +
+- **`private-gateway`** (Go) — a 6PN-only service: Postgres proxy + `CONNECT` proxy + dev page +
   `.internal` DNS forwarder.
 
 Flow: tailnet client → `*.internal` → (Tailscale split DNS sends the query to this node) →
-`pgproxy` DNS forwarder → Fly resolver (`fdaa::3`) → returns 6PN AAAA → kernel subnet route →
+`private-gateway` DNS forwarder → Fly resolver (`fdaa::3`) → returns 6PN AAAA → kernel subnet route →
 target's 6PN listener.
 
 ## Code segregation
 
-**Fly / proxy layer — the `pgproxy` Go binary (no `tailscale.com` import):**
+**Fly / proxy layer — the `private-gateway` Go binary (no `tailscale.com` import):**
 
 | File | Role |
 |---|---|
@@ -58,7 +62,7 @@ target's 6PN listener.
 |---|---|
 | `fly-router.sh` | Derive the org `/48`, `sysctl ip_forward`, start `tailscaled`, `tailscale up` (advertise routes + exit node). Modeled on `fly-apps/tailscale-router`. |
 | Dockerfile | Builds the binary; installs `tailscale` + `iptables`/`ip6tables`; bundles the scripts. |
-| `entrypoint.sh` | Orchestrator: run `fly-router.sh`, then `exec pgproxy`. |
+| `entrypoint.sh` | Orchestrator: run `fly-router.sh`, then `exec private-gateway`. |
 
 Rule: **Tailscale = shell/Docker; Fly = Go.** They never mix in one file.
 
@@ -73,7 +77,7 @@ default chosen for how we run today. Set non-secrets in `fly.toml [env]`, secret
 
 | Env | Default | Why |
 |---|---|---|
-| `TS_AUTHKEY` | — (unset = Tailscale off) | Presence is the on-switch for Tailscale: with it, `fly-router.sh` brings up `tailscaled` and the proxy trusts tailnet sources; without it, Tailscale is skipped and pgproxy is a plain Fly 6PN proxy. Use ephemeral+reusable so dead nodes self-clean. The entrypoint surfaces presence as `--tailscale-enabled` and drops the secret before exec'ing the proxy. |
+| `TS_AUTHKEY` | — (unset = Tailscale off) | Presence is the on-switch for Tailscale: with it, `fly-router.sh` brings up `tailscaled` and the proxy trusts tailnet sources; without it, Tailscale is skipped and private-gateway is a plain Fly 6PN proxy. Use ephemeral+reusable so dead nodes self-clean. The entrypoint surfaces presence as `--tailscale-enabled` and drops the secret before exec'ing the proxy. |
 
 ### Common (good defaults; override only to change behavior)
 
@@ -102,7 +106,7 @@ default chosen for how we run today. Set non-secrets in `fly.toml [env]`, secret
 | `HTTP_PROXY_LISTEN` | `[::]:8080` | Fixed-egress `CONNECT` proxy port; gated to 6PN sources (plus the tailnet if `HTTP_PROXY_ALLOW_TAILSCALE`). |
 | `HTTP_PROXY_ALLOW_TAILSCALE` | `false` | The `CONNECT` proxy lends out this app's *fixed Fly egress IP*, so admitting the whole tailnet is a policy choice — not implied by running Tailscale. Off by default. Turn on to make `*.internal:8080` usable from the tailnet at all: the DNS self-rewrite answers those names with the node's Tailscale IP, which bypasses the subnet route and its SNAT, so such clients arrive as `peerTailscale` rather than `peerFly`. |
 | `DEBUG_PORT` | `80` | Serves the dev page + `/debug/vars`; convenient over 6PN. |
-| `TS_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Local `tailscaled` API socket; pgproxy queries it (raw HTTP) to WhoIs Tailscale clients for `application_name`. Shared with `fly-router.sh`. |
+| `TS_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Local `tailscaled` API socket; private-gateway queries it (raw HTTP) to WhoIs Tailscale clients for `application_name`. Shared with `fly-router.sh`. |
 
 Fly injects `FLY_APP_NAME`, `FLY_REGION`, `FLY_MACHINE_ID`, `FLY_PRIVATE_IP` automatically —
 do not set these.
@@ -163,11 +167,11 @@ early during implementation.
 ## Decisions / scope (current)
 
 - **Per-user attribution via DNS self-rewrite ("Option I").** A tailnet user reaching
-  `pgproxy.internal` over the *subnet route* would be attributed only at the router level
+  `private-gateway.internal` over the *subnet route* would be attributed only at the router level
   (multi-machine forwarding SNATs the source to the router's 6PN address). To get a real
-  per-user `application_name`, the forwarder answers pgproxy's *own* `*.internal` names with
+  per-user `application_name`, the forwarder answers private-gateway's *own* `*.internal` names with
   the node's **Tailscale IP** (auto-enabled on Fly via `FLY_APP_NAME`; `dnsSelfAnswer`). The tailnet
-  client then connects **directly to pgproxy over Tailscale** — no subnet route, no SNAT — so
+  client then connects **directly to private-gateway over Tailscale** — no subnet route, no SNAT — so
   its real source IP is preserved and `whoisTailscale` resolves the login/tags via the local
   `tailscaled` socket. Works on every port (Postgres, dev page, CONNECT), topology-independent.
   Fly 6PN apps are unaffected — they query Fly's resolver, not us, and still get the 6PN address.
@@ -204,4 +208,4 @@ early during implementation.
   deployed as `internal-go-proxy`.
 - **Open item:** `entrypoint.sh`/`fly-router.sh` aren't hardened against a failing
   `tailscale up` crash-looping the container (`set -e`). A past deploy hit a restart loop;
-  if it recurs, run `tailscale up` backgrounded with retries and always `exec pgproxy`.
+  if it recurs, run `tailscale up` backgrounded with retries and always `exec private-gateway`.

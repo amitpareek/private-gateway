@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The pgproxy server is a proxy for the Postgres wire protocol.
+// The private-gateway server is a proxy for the Postgres wire protocol.
 //
 // This file is kept close to the upstream version at
 // https://github.com/tailscale/tailscale/blob/main/cmd/pgproxy/pgproxy.go
@@ -304,7 +304,7 @@ func mkSelfSigned(hostname string) (tls.Certificate, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			Organization: []string{"pgproxy"},
+			Organization: []string{"private-gateway"},
 		},
 		DNSNames:              []string{hostname},
 		NotBefore:             time.Now(),

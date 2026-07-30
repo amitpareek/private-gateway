@@ -253,14 +253,14 @@ func TestDevPage_NeverRendersPasswords(t *testing.T) {
 			DBName: "maindb", User: "app_user", Password: "hunter2-secret"},
 		{Name: "admin", Listen: 5439, Target: "ep-x.neon.tech:5432"},
 	}
-	html := string(renderDevPageHTML("pgproxy.internal", cfgs))
+	html := string(renderDevPageHTML("private-gateway.internal", cfgs))
 	if strings.Contains(html, "hunter2-secret") {
 		t.Fatalf("dev page leaks a configured password")
 	}
 	if !strings.Contains(html, "app_user") {
 		t.Errorf("dev page should show the managed user name")
 	}
-	if !strings.Contains(html, "postgres://pgproxy.internal:5432/maindb") {
+	if !strings.Contains(html, "postgres://private-gateway.internal:5432/maindb") {
 		t.Errorf("dev page should show a copy-paste connection string for managed entries")
 	}
 	if !strings.Contains(html, "managed") || !strings.Contains(html, "passthrough") {

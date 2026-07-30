@@ -4,12 +4,19 @@ Guidance for working in this repo. For the full design + config reference, see [
 
 ## What this is
 
-`pgproxy` is a Postgres wire-protocol proxy that fronts upstream Postgres (e.g. Neon)
-for Fly apps. It enforces strict upstream TLS regardless of the client's TLS, can inject
-upstream credentials ("managed" mode) so clients connect credential-less, attributes
-connections via `application_name`, and also runs an HTTPS `CONNECT` forward proxy (fixed
-Fly egress IP) plus a small dev/reference page. It's a fork kept close to upstream
-`tailscale.com/cmd/pgproxy`.
+`private-gateway` is a private, 6PN-only gateway for Fly apps. Its Postgres proxy
+fronts upstream Postgres (e.g. Neon): it enforces strict upstream TLS regardless of
+the client's TLS, can inject upstream credentials ("managed" mode) so clients connect
+credential-less, and attributes connections via `application_name`. Alongside it the
+binary runs an HTTPS `CONNECT` forward proxy (fixed Fly egress IP) plus a small
+dev/reference page.
+
+**On the name:** the project started as a fork of `tailscale.com/cmd/pgproxy` and was
+called `pgproxy`; the scope has since widened past Postgres, hence `private-gateway`.
+`pgproxy.go` keeps its name because it is still that fork and is still kept
+diff-minimal against upstream. The Postgres proxy stays a separate component from the
+plain-TCP and `CONNECT` proxies on purpose — it carries credential injection and
+attribution logic that a dumb byte pipe must not inherit.
 
 ## Build / test / run
 
@@ -29,7 +36,7 @@ Fly egress IP) plus a small dev/reference page. It's a fork kept close to upstre
 - **Tailscale / fly-router (shell/Docker, NOT Go):**
   - `fly-router.sh` + Dockerfile install lines — all `tailscaled` / `tailscale up` logic
     (the Fly subnet-router setup; modeled on `fly-apps/tailscale-router`).
-  - `entrypoint.sh` — thin orchestration only (run `fly-router.sh`, then `exec pgproxy`).
+  - `entrypoint.sh` — thin orchestration only (run `fly-router.sh`, then `exec private-gateway`).
 
 Rule: **`tsnet`/`tailscale.com` stay out of Go; the binary is not a tailnet node.**
 The one allowed touchpoint: `fly.go` may query the local `tailscaled` API socket
@@ -42,7 +49,7 @@ via **raw HTTP** (no `tailscale.com` import) for best-effort WhoIs. All Tailscal
 `github.com/amitpareek/private-gateway`). The current design — "Approach B" — is a real
 `tailscaled` (TUN) subnet router + exit node alongside the 6PN-only Go proxy, all merged to
 `main`. Tailscale is **optional**: it comes up only when `TS_AUTHKEY` is set; otherwise
-pgproxy is a plain Fly 6PN proxy. Auto-detection (no toggles): `onFly` = `FLY_APP_NAME`
+private-gateway is a plain Fly 6PN proxy. Auto-detection (no toggles): `onFly` = `FLY_APP_NAME`
 present; Tailscale-on = `TS_AUTHKEY` present (surfaced to the binary as `--tailscale-enabled`,
 with the secret unset before exec). `project.md` is the source of truth for design + config.
 
@@ -52,6 +59,9 @@ Known open item: `entrypoint.sh`/`fly-router.sh` aren't hardened against a faili
 ## Conventions
 
 - Keep `pgproxy.go` close to upstream; put customizations in the `EXT` files.
+- The expvar keys stay `pgproxy_<db-name>` even though the project was renamed —
+  they are a runtime contract for anything scraping `/debug/vars`. Don't "finish"
+  the rename there.
 - Match surrounding style; tests live alongside as `*_test.go`.
 - Config is env-driven (see project.md). Tailscale vars are prefixed `TS_`.
 - Commit only when asked. Branch off `main` first if asked to commit.

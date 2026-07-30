@@ -26,22 +26,22 @@ func buildDNSQuery(name string) []byte {
 }
 
 func TestParseDNSQuestionAndIsSelf(t *testing.T) {
-	dnsSelfSuffix = "pgproxy.internal"
+	dnsSelfSuffix = "private-gateway.internal"
 	defer func() { dnsSelfSuffix = "" }()
 	cases := []struct {
 		q    string
 		want bool
 	}{
-		{"pgproxy.internal", true},
-		{"PGPROXY.INTERNAL", true}, // case-insensitive
+		{"private-gateway.internal", true},
+		{"PRIVATE-GATEWAY.INTERNAL", true}, // case-insensitive
 		// Qualified names are NOT self: they relay to Fly's resolver so
 		// they resolve to the machine(s) they name, preserving region
 		// and per-machine selection.
-		{"sin.pgproxy.internal", false},
-		{"148e21.vm.pgproxy.internal", false},
-		{"vms.pgproxy.internal", false},
+		{"sin.private-gateway.internal", false},
+		{"148e21.vm.private-gateway.internal", false},
+		{"vms.private-gateway.internal", false},
 		{"other-app.internal", false},
-		{"notpgproxy.internal", false}, // suffix must be on a label boundary
+		{"notprivate-gateway.internal", false}, // suffix must be on a label boundary
 	}
 	for _, c := range cases {
 		name, qtype, qend, ok := parseDNSQuestion(buildDNSQuery(c.q))
@@ -61,7 +61,7 @@ func TestParseDNSQuestionAndIsSelf(t *testing.T) {
 }
 
 func TestDNSAnswer(t *testing.T) {
-	q := buildDNSQuery("pgproxy.internal") // AAAA
+	q := buildDNSQuery("private-gateway.internal") // AAAA
 	_, qtype, qend, _ := parseDNSQuestion(q)
 	ts := netip.MustParseAddr("fd7a:115c:a1e0::1234")
 	resp := dnsAnswer(q, qtype, ts, qend)
@@ -99,7 +99,7 @@ func TestDNSAnswer(t *testing.T) {
 
 func TestDNSIsSelfDisabledByDefault(t *testing.T) {
 	dnsSelfSuffix = ""
-	if dnsIsSelf("pgproxy.internal") {
+	if dnsIsSelf("private-gateway.internal") {
 		t.Errorf("self-match should be off when dnsSelfSuffix is empty")
 	}
 }

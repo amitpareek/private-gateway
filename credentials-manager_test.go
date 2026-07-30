@@ -38,7 +38,7 @@ func testServerCert(t *testing.T) (tls.Certificate, []byte) {
 	}
 	template := x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{Organization: []string{"pgproxy-test"}},
+		Subject:               pkix.Name{Organization: []string{"private-gateway-test"}},
 		DNSNames:              []string{"localhost"},
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		NotBefore:             time.Now().Add(-time.Hour),

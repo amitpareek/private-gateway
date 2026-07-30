@@ -11,7 +11,7 @@
 // Special case ("Option I", auto-enabled on Fly via FLY_APP_NAME): for
 // THIS app's own bare <app>.internal name, instead of returning the 6PN
 // address it answers with this node's *Tailscale* IP. Tailnet clients then
-// reach pgproxy directly over Tailscale on every port — no subnet route, no
+// reach private-gateway directly over Tailscale on every port — no subnet route, no
 // SNAT — so their real source IP is preserved and WhoIs can attribute them.
 // Fly 6PN apps are unaffected: they query Fly's resolver, not us, and still
 // get the 6PN address. No tailscale.com dependency — we read our own
@@ -116,7 +116,7 @@ func startDNSForwarder() {
 	// tailscaled assigns an IP, selfTailscaleAddr falls back to forwarding.
 	if app := strings.TrimSpace(os.Getenv("FLY_APP_NAME")); app != "" {
 		dnsSelfSuffix = strings.ToLower(app) + ".internal"
-		log.Printf("dns: answering %s with this node's Tailscale IP (tailnet reaches pgproxy directly over Tailscale)", dnsSelfSuffix)
+		log.Printf("dns: answering %s with this node's Tailscale IP (tailnet reaches private-gateway directly over Tailscale)", dnsSelfSuffix)
 	}
 
 	pc, err := net.ListenPacket("udp", dnsListen)

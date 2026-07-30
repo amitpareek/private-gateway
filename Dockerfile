@@ -1,5 +1,5 @@
-# pgproxy image. Two layers run side by side at runtime:
-#   - Fly/proxy (the `pgproxy` Go binary): pgproxy.go (pure Postgres wire
+# private-gateway image. Two layers run side by side at runtime:
+#   - Fly/proxy (the `private-gateway` Go binary): pgproxy.go (pure Postgres wire
 #     proxy), credentials-manager.go (managed/credential-injection mode),
 #     httpproxy.go (HTTPS CONNECT proxy), fly.go (all Fly glue: config,
 #     dev page, source gating, application_name, .internal DNS forwarder).
@@ -7,14 +7,14 @@
 #     router + exit node (modeled on fly-apps/tailscale-router).
 # entrypoint.sh wires them together. See project.md.
 #
-# go.mod requires go >= 1.24. The pgproxy binary has NO Tailscale
+# go.mod requires go >= 1.24. The private-gateway binary has NO Tailscale
 # dependency; Tailscale runs only as the separate runtime daemon.
 FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/pgproxy .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/private-gateway .
 
 FROM alpine:3.20
 # ca-certificates: verify upstream (Neon etc.) TLS.
@@ -22,7 +22,7 @@ FROM alpine:3.20
 # iptables/ip6tables: tailscaled programs SNAT + forwarding rules.
 RUN apk add --no-cache ca-certificates tailscale iptables ip6tables
 
-COPY --from=build /out/pgproxy /pgproxy
+COPY --from=build /out/private-gateway /private-gateway
 COPY entrypoint.sh /entrypoint.sh
 COPY fly-router.sh /fly-router.sh
 RUN chmod +x /entrypoint.sh /fly-router.sh

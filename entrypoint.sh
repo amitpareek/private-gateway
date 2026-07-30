@@ -1,11 +1,11 @@
 #!/bin/sh
 # Orchestrator: bring up the fly-router (Tailscale) layer, then hand off
 # to the Fly/proxy layer. Thin glue only — router logic lives in
-# fly-router.sh, proxy logic in the pgproxy binary. All config is
+# fly-router.sh, proxy logic in the private-gateway binary. All config is
 # env-driven; see project.md for the full table and defaults.
 #
 # Components (all from this one image):
-#   pgproxy        the Go proxy binary, built from:
+#   private-gateway        the Go proxy binary, built from:
 #     pgproxy.go              pure Postgres wire proxy (strict upstream TLS)
 #     credentials-manager.go  managed mode: proxy logs in upstream so clients
 #                             connect credential-less
@@ -22,7 +22,7 @@ TS_ENABLED=false
 [ -n "${TS_AUTHKEY:-}" ] && TS_ENABLED=true
 
 # fly-router layer (Tailscale subnet router + exit node). Backgrounded
-# tailscaled survives the exec below by reparenting to pgproxy (PID 1).
+# tailscaled survives the exec below by reparenting to private-gateway (PID 1).
 # No-op when TS_AUTHKEY is unset.
 /fly-router.sh
 
@@ -31,7 +31,7 @@ unset TS_AUTHKEY
 
 # Fly / proxy layer. Map env -> flags (the binary has no Tailscale flags
 # beyond the derived --tailscale-enabled bool).
-exec /pgproxy \
+exec /private-gateway \
   --debug-port="${DEBUG_PORT:-80}" \
   --upstream-ca-file="${UPSTREAM_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}" \
   --fly-listen-host="${FLY_LISTEN_HOST:-[::]}" \

@@ -210,7 +210,7 @@ func runProxies(upstreamCAPath string, debugMux *http.ServeMux) {
 // use the HTTP CONNECT proxy. Passwords are never displayed.
 func renderDevPage(w http.ResponseWriter, cfgs []upstreamConfig) {
 	flyApp := os.Getenv("FLY_APP_NAME")
-	flyHost := "pgproxy.internal"
+	flyHost := "private-gateway.internal"
 	if flyApp != "" {
 		flyHost = flyApp + ".internal"
 	}
@@ -242,7 +242,7 @@ func renderDevPageHTML(flyHost string, cfgs []upstreamConfig) []byte {
 
 	var b bytes.Buffer
 	b.WriteString(`<!doctype html>
-<html><head><meta charset="utf-8"><title>pgproxy</title>
+<html><head><meta charset="utf-8"><title>private-gateway</title>
 <style>
 body { font-family: -apple-system, system-ui, sans-serif; max-width: 780px; margin: 2em auto; padding: 0 1em; color: #222; line-height: 1.45; }
 h1 { margin-bottom: 0.1em; }
@@ -256,7 +256,7 @@ th { color: #666; font-weight: normal; width: 8em; }
 .target { color: #555; }
 .warn { background: #fff5d6; padding: 10px 12px; border-radius: 4px; border: 1px solid #f0d990; }
 </style></head><body>
-<h1>pgproxy</h1>
+<h1>private-gateway</h1>
 <p class="note">Reachable to Fly apps over 6PN (and to the tailnet via a separate Tailscale subnet router).</p>
 
 <h2>Databases</h2>
@@ -391,8 +391,8 @@ var onFly = os.Getenv("FLY_APP_NAME") != ""
 // Note on attribution: traffic forwarded through the subnet router from
 // the tailnet is SNATed to a 6PN address, so it classifies as peerFly.
 // To be identified as a specific Tailscale user, a client must reach
-// pgproxy at its Tailscale IP directly — which is why the forwarder
-// answers pgproxy's own *.internal names with our Tailscale IP.
+// private-gateway at its Tailscale IP directly — which is why the forwarder
+// answers private-gateway's own *.internal names with our Tailscale IP.
 func classifyPeer(remote string) peerKind {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {

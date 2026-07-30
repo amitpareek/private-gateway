@@ -1,14 +1,14 @@
 #!/bin/sh
 # fly-router.sh — make this Fly machine a Tailscale subnet router + exit
 # node for the Fly 6PN network. This is the entire "Tailscale layer";
-# the pgproxy Go binary contains no Tailscale code.
+# the private-gateway Go binary contains no Tailscale code.
 #
 # Modeled on the reference project:
 #   https://github.com/fly-apps/tailscale-router
 #
 # ─── WHAT THIS DOES, AND WHY ────────────────────────────────────────────
 # Goal: let people on a Tailscale tailnet reach Fly apps addressed as
-# <app>.internal (including pgproxy), and use this machine as an exit node.
+# <app>.internal (including private-gateway), and use this machine as an exit node.
 #
 # Fly's private network ("6PN", the IPv6 range fdaa::/16) is not part of
 # the tailnet, so a tailnet client can't reach it directly. This script
@@ -18,7 +18,7 @@
 #   2. the Linux kernel FORWARDS packets between the Tailscale interface
 #      and Fly 6PN (ip_forward).
 # A tailnet client then resolves <app>.internal (via Tailscale split DNS →
-# the pgproxy DNS forwarder, see fly.go) and routes the connection
+# the private-gateway DNS forwarder, see fly.go) and routes the connection
 # through this machine to the 6PN target.
 #
 # Why a REAL tailscaled (TUN), not userspace/tsnet:
@@ -29,7 +29,7 @@
 #   whole point of this design.
 #
 # This is the Tailscale layer. Its sibling, the Fly/proxy layer, is the
-# `pgproxy` Go binary:
+# `private-gateway` Go binary:
 #   pgproxy.go              pure Postgres wire proxy (strict upstream TLS)
 #   credentials-manager.go  managed mode: proxy logs in upstream, clients
 #                           connect credential-less
@@ -37,13 +37,13 @@
 #   fly.go                  all Fly glue: config, dev page, source gating,
 #                           application_name, AND the .internal DNS forwarder
 #                           (the Go companion to this script)
-# entrypoint.sh runs this script, then exec's pgproxy. See project.md.
+# entrypoint.sh runs this script, then exec's private-gateway. See project.md.
 #
 # Config is env-driven (TS_* vars). Defaults below are what we run today;
 # the rationale for each lives in project.md.
 set -e
 
-# Tailscale is optional: with no TS_AUTHKEY we skip it entirely and pgproxy
+# Tailscale is optional: with no TS_AUTHKEY we skip it entirely and private-gateway
 # runs as a plain (Fly 6PN) proxy. Use an ephemeral+reusable+tagged key.
 if [ -z "${TS_AUTHKEY:-}" ]; then
   echo "fly-router: TS_AUTHKEY not set — Tailscale disabled, running proxy only"
@@ -61,7 +61,7 @@ TS_SOCKET="${TS_SOCKET:-/var/run/tailscale/tailscaled.sock}"
 # Hostname = machineid-region-appname. The machine id keeps every
 # ephemeral node uniquely named across restarts/regions (no MagicDNS
 # -1/-2 suffix collisions).
-DEFAULT_HOSTNAME="${FLY_MACHINE_ID:-pgproxy}-${FLY_REGION:-local}-${FLY_APP_NAME:-pgproxy}"
+DEFAULT_HOSTNAME="${FLY_MACHINE_ID:-private-gateway}-${FLY_REGION:-local}-${FLY_APP_NAME:-private-gateway}"
 TS_HOSTNAME="${TS_HOSTNAME:-$DEFAULT_HOSTNAME}"
 
 # Routes to advertise. If TS_ADVERTISE_ROUTES is unset, derive the org's
@@ -99,9 +99,9 @@ fi
 mkdir -p "$TS_STATE_DIR" "$(dirname "$TS_SOCKET")"
 
 # ─── Start the daemon ───────────────────────────────────────────────────
-# Backgrounded: it keeps running after entrypoint.sh exec's pgproxy (it
+# Backgrounded: it keeps running after entrypoint.sh exec's private-gateway (it
 # reparents to PID 1). NOTE: there is no supervisor — if tailscaled dies,
-# routing stops but pgproxy keeps serving 6PN.
+# routing stops but private-gateway keeps serving 6PN.
 tailscaled \
   --state="$TS_STATE_DIR/tailscaled.state" \
   --socket="$TS_SOCKET" \

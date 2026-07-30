@@ -1,30 +1,35 @@
-# pgproxy
+# private-gateway
 
-A Postgres wire-protocol proxy for Fly.io that also acts as a Tailscale subnet
-router + exit node, so your tailnet can reach Fly 6PN apps (`*.internal`) and use
-the machine for region-specific egress.
+A private, 6PN-only gateway for Fly.io apps. It bundles a Postgres wire-protocol
+proxy and an HTTPS `CONNECT` forward proxy behind one service, and also acts as a
+Tailscale subnet router + exit node, so your tailnet can reach Fly 6PN apps
+(`*.internal`) and use the machine for region-specific egress.
 
 Two things run in one container:
 
-- **`pgproxy`** (Go) — the proxy: strict upstream TLS, optional credential
-  injection ("managed" mode), `application_name` attribution, an HTTPS `CONNECT`
-  forward proxy, and a `.internal` DNS forwarder.
+- **`private-gateway`** (Go) — the gateway binary. Its Postgres proxy does strict
+  upstream TLS, optional credential injection ("managed" mode) and
+  `application_name` attribution; alongside it run an HTTPS `CONNECT` forward
+  proxy and a `.internal` DNS forwarder.
 - **`fly-router.sh`** — a real `tailscaled` (TUN) that advertises the org's 6PN
   subnet + exit node; the kernel forwards. Modeled on
   [fly-apps/tailscale-router](https://github.com/fly-apps/tailscale-router).
 
 See [project.md](project.md) for architecture and the full config reference;
-[CLAUDE.md](CLAUDE.md) for the code layout. This is a fork of upstream
-[`tailscale.com/cmd/pgproxy`](https://github.com/tailscale/tailscale/tree/main/cmd/pgproxy).
+[CLAUDE.md](CLAUDE.md) for the code layout. The Postgres proxy (`pgproxy.go`) is a
+fork kept close to upstream
+[`tailscale.com/cmd/pgproxy`](https://github.com/tailscale/tailscale/tree/main/cmd/pgproxy),
+which is where the project started before it grew into a general gateway — that
+history is why the file keeps its original name.
 
 ## Quickstart
 
 Setting **`TS_AUTHKEY`** enables the Tailscale router/exit-node; everything else
-has a sensible default. **`TS_AUTHKEY` is optional** — omit it and pgproxy runs as
+has a sensible default. **`TS_AUTHKEY` is optional** — omit it and private-gateway runs as
 a plain Fly 6PN proxy (reachable by Fly apps over 6PN, just not over the tailnet).
 
 ```sh
-fly apps create pgproxy
+fly apps create private-gateway
 fly secrets set TS_AUTHKEY="tskey-auth-..."   # ephemeral + reusable + tagged; omit for 6PN-only
 fly deploy
 ```
@@ -58,9 +63,9 @@ var only to change it. Non-secrets go in `fly.toml [env]`; secrets via
 | **Subnet route** | `TS_ADVERTISE_ROUTES` | auto-derive org `/48` | from `fly-local-6pn`; or set a CIDR, or empty to disable |
 | **Exit node** | `TS_ADVERTISE_EXIT_NODE` | `true` | each machine is a region-specific exit node |
 | **`.internal` DNS** | `DNS_RESOLVER` | `[fdaa::3]:53` on Fly, off elsewhere | forwards `*.internal` to this resolver; auto-set on Fly, set explicitly on other providers, empty disables |
-| **DNS self → Tailscale** | _(automatic)_ | on when `FLY_APP_NAME` is set | Answers *this app's* own `*.internal` with the node's **Tailscale IP**, so tailnet clients reach pgproxy directly over Tailscale (identifiable). Auto-detected on Fly; no env var. See Identity. |
+| **DNS self → Tailscale** | _(automatic)_ | on when `FLY_APP_NAME` is set | Answers *this app's* own `*.internal` with the node's **Tailscale IP**, so tailnet clients reach private-gateway directly over Tailscale (identifiable). Auto-detected on Fly; no env var. See Identity. |
 | **`<app>.<env>` alias** | `ALIAS_DOMAIN` / `INTERNAL_DOMAIN` | off (`ALIAS_DOMAIN` empty) | Maps `<app>.<env>` (e.g. `core.prod`) to `<app>.<internal-domain>`, resolves it via `DNS_RESOLVER`, and answers under the alias name. `INTERNAL_DOMAIN` defaults to `internal` on Fly, empty (bare service name, e.g. Docker DNS) elsewhere. See Environment aliases. |
-| **Hostname** | `TS_HOSTNAME` | `<machineid>-<region>-<app>` | e.g. `148e21-sin-pgproxy`. Dashes, not dots — Tailscale MagicDNS converts dots to dashes anyway. The machine id keeps every ephemeral node uniquely named. |
+| **Hostname** | `TS_HOSTNAME` | `<machineid>-<region>-<app>` | e.g. `148e21-sin-private-gateway`. Dashes, not dots — Tailscale MagicDNS converts dots to dashes anyway. The machine id keeps every ephemeral node uniquely named. |
 
 `TS_AUTHKEY` (secret) enables Tailscale (omit for a 6PN-only proxy). Optional: `DESTINATION_PG_DBS` (secret). Advanced
 knobs (`TS_ACCEPT_DNS`, `TS_SNAT_SUBNET_ROUTES`, `TS_STATE_DIR`, `TS_SOCKET`,
@@ -69,17 +74,17 @@ listed with rationale in [project.md](project.md).
 
 ## Connecting
 
-- **From a Fly app (6PN):** `postgres://pgproxy.internal:5432/mydb`
-- **From the tailnet:** `postgres://pgproxy.internal:5432/mydb` works too — for tailnet
-  clients the forwarder resolves pgproxy's *own* `.internal` name to its **Tailscale
-  IP**, so the connection goes straight to pgproxy over Tailscale (and stays
-  identifiable; see Identity). pgproxy's Tailscale name (`<machineid>-<region>-<app>`)
+- **From a Fly app (6PN):** `postgres://private-gateway.internal:5432/mydb`
+- **From the tailnet:** `postgres://private-gateway.internal:5432/mydb` works too — for tailnet
+  clients the forwarder resolves private-gateway's *own* `.internal` name to its **Tailscale
+  IP**, so the connection goes straight to private-gateway over Tailscale (and stays
+  identifiable; see Identity). private-gateway's Tailscale name (`<machineid>-<region>-<app>`)
   also works.
 - **Reaching other Fly apps from the tailnet:** `some-app.internal` — these resolve to
   6PN and route through this node normally.
 
 Managed entries (with `user`+`password`) let clients connect credential-less, e.g.
-`postgres://pgproxy.internal:5432/mydb` with no password — the proxy authenticates
+`postgres://private-gateway.internal:5432/mydb` with no password — the proxy authenticates
 upstream itself.
 
 ## Environment aliases (`<app>.<env>`)
@@ -115,7 +120,7 @@ The proxy stamps `application_name` so you can attribute traffic in
   `tailscaled` socket, and **always appended** to whatever the client sent — so a
   human on `psql` shows up as `psql (amit@example.com)`, never just `psql`. (If the
   client sent nothing, it's just the login.) This works because the forwarder
-  automatically resolves pgproxy's own `.internal` name to its **Tailscale IP** for
+  automatically resolves private-gateway's own `.internal` name to its **Tailscale IP** for
   tailnet clients (auto-detected on Fly via `FLY_APP_NAME`), so they reach it directly
   over Tailscale — their real source IP is preserved for WhoIs, instead of being SNAT'd
   to the router on the 6PN path.

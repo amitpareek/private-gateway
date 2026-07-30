@@ -1,4 +1,4 @@
-module github.com/cakewalk/pgproxy
+module github.com/amitpareek/private-gateway
 
 go 1.24.0
 

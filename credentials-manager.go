@@ -111,7 +111,7 @@ func (p *proxy) serveManaged(ctx context.Context, sessionID int64, c net.Conn, i
 	upstream, err := pgconn.ConnectConfig(ctx, cfg)
 	if err != nil {
 		p.errors.Add("upstream-connect", 1)
-		writeManagedError(clientConn, fmt.Sprintf("pgproxy: upstream connection failed: %v", err))
+		writeManagedError(clientConn, fmt.Sprintf("private-gateway: upstream connection failed: %v", err))
 		return fmt.Errorf("upstream connect: %v", err)
 	}
 	if err := upstream.SyncConn(ctx); err != nil {
